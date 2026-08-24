@@ -13,16 +13,27 @@ const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const state = {
   session: null,
   allowed: null,          // null = unknown, true/false after check
+  myAccess: null,         // 'read' | 'write' | 'admin' once signed in and allowed
   authView: 'signin',     // signin | signup | forgot | recovery | pending
   authMsg: null,          // {text, err}
   builders: [],
   contacts: [],
   titleCompanies: [],
   roles: [],
-  team: [],
+  team: [],               // [{email, access}]
   sel: null,              // {type:'b'|'t', id}
   q: '',
 };
+
+const canWrite = () => state.myAccess === 'write' || state.myAccess === 'admin';
+const isAdmin = () => state.myAccess === 'admin';
+
+function applyTeam(rows) {
+  state.team = rows;
+  const me = state.session ? ci(state.session.user.email) : '';
+  const mine = rows.find(r => ci(r.email) === me);
+  state.myAccess = mine ? mine.access : null;
+}
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s)
@@ -73,17 +84,18 @@ async function boot() {
 }
 
 async function enter() {
-  const { data, error } = await db.from('allowed_users').select('email').order('email');
+  const { data, error } = await db.from('allowed_users').select('email, access').order('email');
   if (error) {
     state.authView = 'signin';
     state.authMsg = { text: 'Could not reach the database: ' + friendlyError(error), err: true };
     renderAuth();
     return;
   }
-  state.team = data.map(r => r.email);
+  applyTeam(data);
   state.allowed = data.length > 0;
   if (!state.allowed) { renderAuth(); return; }
   await loadAll();
+  if (!state.allowed) return;
   if (!state.sel && state.builders.length) state.sel = { type: 'b', id: state.builders[0].id };
   $('#auth-screen').hidden = true;
   $('#app').hidden = false;
@@ -182,15 +194,23 @@ async function handleAuth(action) {
 
 // ------------------------------------------------------------------ data
 async function loadAll() {
-  const [b, c, tc, r] = await Promise.all([
+  const [b, c, tc, r, team] = await Promise.all([
     db.from('builders').select('*').order('name'),
     db.from('contacts').select('*'),
     db.from('title_companies').select('*').order('name'),
     db.from('roles').select('*').order('position'),
+    db.from('allowed_users').select('email, access').order('email'),
   ]);
-  for (const res of [b, c, tc, r]) {
+  for (const res of [b, c, tc, r, team]) {
     if (res.error) { toast('Load failed: ' + friendlyError(res.error), true); return; }
   }
+  if (team.data.length === 0) {   // access was revoked while signed in
+    state.allowed = false;
+    state.myAccess = null;
+    renderAuth();
+    return;
+  }
+  applyTeam(team.data);
   state.builders = b.data;
   state.contacts = c.data;
   state.titleCompanies = tc.data;
@@ -199,6 +219,7 @@ async function loadAll() {
 
 async function refresh() {
   await loadAll();
+  if (!state.allowed) return;
   const list = state.sel && state.sel.type === 'b' ? state.builders : state.titleCompanies;
   if (state.sel && !list.some(x => x.id === state.sel.id)) {
     state.sel = state.builders.length ? { type: 'b', id: state.builders[0].id } : null;
@@ -243,6 +264,8 @@ function gapsFor(b) {
 
 // ------------------------------------------------------------------ render
 function render() {
+  $('[data-action="team"]').hidden = !isAdmin();
+  $('#access-note').hidden = state.myAccess !== 'read';
   renderSidebar();
   renderMain();
 }
@@ -260,9 +283,9 @@ function renderSidebar() {
   });
   const tcs = state.titleCompanies.filter(x => !q || ci(x.name + ' ' + x.agent_name).includes(q));
 
+  const newBtn = (action) => canWrite() ? `<button data-action="${action}">+ New</button>` : '';
   let html = `
-    <div class="side-heading"><span>Builders</span>
-      <button data-action="new-builder">+ New</button></div>`;
+    <div class="side-heading"><span>Builders</span>${newBtn('new-builder')}</div>`;
   for (const b of builders) {
     const active = state.sel && state.sel.type === 'b' && state.sel.id === b.id;
     const g = gapsFor(b).length;
@@ -280,8 +303,7 @@ function renderSidebar() {
       </div>`;
   }
   html += `
-    <div class="side-heading" style="margin-top:20px"><span>Title companies</span>
-      <button data-action="new-titleco">+ New</button></div>`;
+    <div class="side-heading" style="margin-top:20px"><span>Title companies</span>${newBtn('new-titleco')}</div>`;
   for (const x of tcs) {
     const active = state.sel && state.sel.type === 't' && state.sel.id === x.id;
     const miss = (t(x.agent_name) ? 0 : 1) + (t(x.asst_name) ? 0 : 1);
@@ -340,8 +362,8 @@ function renderMain() {
     main.innerHTML = `
       <div class="center-empty"><div style="text-align:center">
         <div style="font-size:15px;font-weight:600;color:var(--text-mid)">Nothing selected</div>
-        <div style="font-size:13.5px;color:oklch(0.55 0.02 235);margin-top:6px">Pick a builder on the left, or create one.</div>
-        <button class="btn-solid" style="margin-top:16px" data-action="new-builder">+ New builder</button>
+        <div style="font-size:13.5px;color:oklch(0.55 0.02 235);margin-top:6px">Pick a builder on the left${canWrite() ? ', or create one' : ''}.</div>
+        ${canWrite() ? '<button class="btn-solid" style="margin-top:16px" data-action="new-builder">+ New builder</button>' : ''}
       </div></div>`;
     return;
   }
@@ -363,7 +385,7 @@ function renderBuilder(main, b) {
       <div class="card person-card">
         <div class="person-top">
           <span class="role-pill">${esc(p.role || 'Contact')}</span>
-          <button class="edit-link" data-action="edit-contact" data-id="${p.id}">Edit</button>
+          ${canWrite() ? `<button class="edit-link" data-action="edit-contact" data-id="${p.id}">Edit</button>` : ''}
         </div>
         <div class="person-name">${esc(p.name)}</div>
         <div class="person-contact">
@@ -387,14 +409,16 @@ function renderBuilder(main, b) {
         ${dbx ? (dbxIsUrl
           ? `<a class="btn-ghost mono" href="${esc(dbx)}" target="_blank" rel="noopener">Dropbox folder ↗</a>`
           : `<span class="dropbox-path" title="Dropbox location">${esc(dbx)}</span>`) : ''}
-        <button class="btn-ghost" data-action="edit-builder" data-id="${b.id}">Edit builder</button>
+        ${canWrite() ? `<button class="btn-ghost" data-action="edit-builder" data-id="${b.id}">Edit builder</button>` : ''}
       </div>
     </div>
 
     ${gaps.length ? `
       <div class="gap-row">
         <span class="gap-row-label">To fill in</span>
-        ${gaps.map((g, i) => `<button class="gap-chip" data-action="gap" data-idx="${i}">${esc(g.label)}</button>`).join('')}
+        ${gaps.map((g, i) => canWrite()
+          ? `<button class="gap-chip" data-action="gap" data-idx="${i}">${esc(g.label)}</button>`
+          : `<span class="gap-chip static">${esc(g.label)}</span>`).join('')}
       </div>` : `
       <div class="complete-row"><span class="ok-dot"></span>Profile complete, nothing missing</div>`}
 
@@ -425,7 +449,7 @@ function renderBuilder(main, b) {
         <h2>People</h2>
         <span class="count">${people.length} ${people.length === 1 ? 'person' : 'people'}</span>
       </div>
-      <button class="btn-solid" data-action="new-contact" data-builder="${b.id}">+ Add person</button>
+      ${canWrite() ? `<button class="btn-solid" data-action="new-contact" data-builder="${b.id}">+ Add person</button>` : ''}
     </div>
     ${people.length
       ? `<div class="people-grid">${peopleCards}</div>`
@@ -433,7 +457,7 @@ function renderBuilder(main, b) {
 
     <div class="section-head">
       <h2>Title &amp; escrow</h2>
-      ${tc ? `<button class="btn-ghost" data-action="edit-titleco" data-id="${tc.id}">Edit company</button>` : ''}
+      ${tc && canWrite() ? `<button class="btn-ghost" data-action="edit-titleco" data-id="${tc.id}">Edit company</button>` : ''}
     </div>
     ${tc ? `
       <div class="card">
@@ -441,8 +465,9 @@ function renderBuilder(main, b) {
         <div style="font-size:17px;font-weight:800;margin-top:6px;letter-spacing:-0.01em">${esc(tc.name)}</div>
         ${escrowSectionHtml(tc)}
       </div>` : `
-      <div class="empty-box">No title company linked yet.
-        <button class="linkish" style="font-size:13.5px;font-weight:700" data-action="edit-builder" data-id="${b.id}">Link one</button>
+      <div class="empty-box">No title company linked yet.${canWrite()
+        ? ` <button class="linkish" style="font-size:13.5px;font-weight:700" data-action="edit-builder" data-id="${b.id}">Link one</button>`
+        : ''}
       </div>`}
   </div>`;
 }
@@ -458,7 +483,7 @@ function renderTitleCo(main, tc) {
         <h1>${esc(tc.name)}</h1>
       </div>
       <div class="page-head-actions">
-        <button class="btn-ghost" data-action="edit-titleco" data-id="${tc.id}">Edit company</button>
+        ${canWrite() ? `<button class="btn-ghost" data-action="edit-titleco" data-id="${tc.id}">Edit company</button>` : ''}
       </div>
     </div>
     <div class="usedby-row">
@@ -548,7 +573,7 @@ function openContactModal(id, preset = {}) {
           <select data-f="builder_id">${bOpts}</select></label>
         <label class="form-field"><span class="form-label">Role</span>
           <select data-f="role"><option value="">Choose role...</option>${rOpts}</select>
-          <span class="roles-note"><button class="linkish" style="font-size:12px" data-action="roles">Edit the role list</button></span>
+          ${isAdmin() ? '<span class="roles-note"><button class="linkish" style="font-size:12px" data-action="roles">Edit the role list</button></span>' : ''}
         </label>
       </div>
       ${field('Name', 'name', c && c.name, { ph: 'Full name' })}
@@ -614,19 +639,33 @@ function openHelpModal() {
 
 function openTeamModal() {
   const me = state.session ? ci(state.session.user.email) : '';
+  const levels = ['read', 'write', 'admin'];
+  const accessSelect = (email, current) => `
+    <select class="access-select" data-team-access data-email="${esc(email)}">
+      ${levels.map(a => `<option value="${a}" ${a === current ? 'selected' : ''}>${a}</option>`).join('')}
+    </select>`;
   modalShell('Team access', `
     <div data-form="team">
-      <div class="team-hint">Anyone on this list can sign in and see the database.
-        To add a teammate: add their email here, then have them create an account with that exact email.</div>
+      <div class="team-hint">Everyone on this list can sign in and see the database.
+        <strong>Read</strong> is view only. <strong>Write</strong> can edit builders, people,
+        and title companies. <strong>Admin</strong> can also manage this list and the role list.
+        To add a teammate: add their email, pick a level, then have them create an account with
+        that exact email.</div>
       <div class="team-list">
-        ${state.team.map(e => `
+        ${state.team.map(r => `
           <div class="team-row">
-            <span class="email">${esc(e)}${ci(e) === me ? ' <span style="color:var(--text-muted)">(you)</span>' : ''}</span>
-            <button class="edit-link" data-action="team-remove" data-email="${esc(e)}">Remove</button>
+            <span class="email">${esc(r.email)}${ci(r.email) === me ? ' <span style="color:var(--text-muted)">(you)</span>' : ''}</span>
+            <span class="team-controls">
+              ${accessSelect(r.email, r.access)}
+              <button class="edit-link" data-action="team-remove" data-email="${esc(r.email)}">Remove</button>
+            </span>
           </div>`).join('')}
       </div>
       <div class="team-add">
         <input type="email" data-f="new_email" placeholder="teammate@company.com">
+        <select class="access-select" data-f="new_access">
+          ${levels.map(a => `<option value="${a}">${a}</option>`).join('')}
+        </select>
         <button class="btn-solid" data-action="team-add">Add</button>
       </div>
     </div>`, { narrow: true });
@@ -860,13 +899,13 @@ async function exportExcel() {
 
 // ------------------------------------------------------------------ team & roles actions
 async function teamAdd() {
-  const input = $('#modal-root [data-f="new_email"]');
-  const email = ci(t(input.value));
+  const email = ci(t($('#modal-root [data-f="new_email"]').value));
+  const access = $('#modal-root [data-f="new_access"]').value;
   if (!email || !email.includes('@')) { toast('Enter an email address.', true); return; }
-  const { error } = await db.from('allowed_users').insert({ email });
+  const { error } = await db.from('allowed_users').insert({ email, access });
   if (error) { toast(friendlyError(error), true); return; }
-  state.team.push(email);
-  state.team.sort();
+  state.team.push({ email, access });
+  state.team.sort((a, b) => a.email.localeCompare(b.email));
   openTeamModal();
 }
 
@@ -877,10 +916,31 @@ async function teamRemove(email, btn) {
     btn.textContent = ci(email) === me ? 'This locks YOU out. Click again.' : 'Click again to confirm';
     return;
   }
-  const { error } = await db.from('allowed_users').delete().eq('email', email);
-  if (error) { toast(friendlyError(error), true); return; }
-  state.team = state.team.filter(e => e !== email);
+  const { data, error } = await db.from('allowed_users').delete().eq('email', email).select();
+  if (error) { toast(friendlyError(error), true); openTeamModal(); return; }
+  if (!data.length) { toast('Not allowed.', true); openTeamModal(); return; }
+  state.team = state.team.filter(r => r.email !== email);
+  if (ci(email) === me) { state.allowed = false; state.myAccess = null; closeModal(); renderAuth(); return; }
   openTeamModal();
+}
+
+async function teamSetAccess(sel) {
+  const email = sel.dataset.email;
+  const { data, error } = await db.from('allowed_users')
+    .update({ access: sel.value }).eq('email', email).select();
+  if (error || !data.length) {
+    toast(error ? friendlyError(error) : 'Not allowed.', true);
+    openTeamModal();
+    return;
+  }
+  const row = state.team.find(r => r.email === email);
+  if (row) row.access = sel.value;
+  toast('Access updated');
+  if (state.session && ci(email) === ci(state.session.user.email)) {
+    state.myAccess = sel.value;
+    if (!isAdmin()) closeModal();
+    render();
+  }
 }
 
 async function roleAdd() {
@@ -961,6 +1021,11 @@ document.addEventListener('click', async (e) => {
   if (a === 'role-remove') roleRemove(el.dataset.id, el);
   if (a === 'role-up') roleMove(el.dataset.id, -1);
   if (a === 'role-down') roleMove(el.dataset.id, 1);
+});
+
+document.addEventListener('change', (e) => {
+  const sel = e.target.closest('[data-team-access]');
+  if (sel) teamSetAccess(sel);
 });
 
 $('#search').addEventListener('input', (e) => {

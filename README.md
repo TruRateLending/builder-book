@@ -27,14 +27,22 @@ Live app: https://itsaustinjordan.github.io/builder-book/
 
 ## Team access
 
-Sign-ins are individual email + password accounts (Supabase auth). Access to
-data is controlled by the allowlist inside the app: Team button in the bottom
-left. Adding a teammate:
+Sign-ins are individual email + password accounts (Supabase auth). Access is
+controlled by the team list inside the app (Team button, admins only), with
+three levels enforced by row level security in the database:
 
-1. Add their email under Team.
-2. They open the app, choose "Create an account" with that exact email.
+- **read**: view everything and export to Excel, no editing
+- **write**: read plus create/edit/delete builders, people, and title companies
+- **admin**: write plus manage the team list and the contact role list
 
-Removing an email immediately cuts off that person's access to the data.
+Adding a teammate:
+
+1. An admin adds their email under Team and picks a level.
+2. They open the app and choose "Create an account" with that exact email.
+
+Removing an email immediately cuts off that person's access. The database
+refuses to remove or demote the last remaining admin, so the team can never
+lock itself out.
 
 ## Hosting and backend
 

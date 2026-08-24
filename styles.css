@@ -276,6 +276,18 @@ input:focus, select:focus, textarea:focus { outline: 2px solid oklch(0.55 0.1 15
 .team-add { display: flex; gap: 8px; margin-top: 14px; }
 .team-add input { flex: 1; padding: 9px 12px; border: 1px solid oklch(0.87 0.012 235); border-radius: 8px; background: oklch(0.985 0.003 235); }
 .team-hint { font-size: 12.5px; color: var(--text-muted); line-height: 1.5; margin-top: 12px; }
+.team-controls { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.access-select {
+  font-family: var(--mono); font-size: 11.5px; padding: 4px 6px;
+  border: 1px solid oklch(0.87 0.012 235); border-radius: 7px; background: oklch(0.985 0.003 235);
+}
+.gap-chip.static { cursor: default; }
+.gap-chip.static:hover { background: oklch(0.965 0.045 85); }
+.access-note {
+  font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--amber-text); background: var(--amber-bg);
+  border: 1px solid var(--amber-border); border-radius: 99px; padding: 2px 9px;
+}
 
 .roles-note { font-size: 12.5px; color: var(--text-muted); line-height: 1.5; margin-top: 10px; }
 
