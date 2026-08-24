@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Builder Book</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%232E6B4F'/><text x='16' y='22' font-family='sans-serif' font-size='14' font-weight='800' fill='white' text-anchor='middle'>BB</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=Spline+Sans+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- Sign in / sign up / reset password -->
+<div id="auth-screen" hidden>
+  <div class="auth-card">
+    <div class="brand">
+      <div class="brand-logo">BB</div>
+      <div>
+        <div class="brand-name">Builder Book</div>
+        <div class="brand-sub">Contacts &middot; Title &middot; Concessions</div>
+      </div>
+    </div>
+    <div id="auth-body"></div>
+  </div>
+</div>
+
+<!-- Main app -->
+<div id="app" hidden>
+  <aside id="sidebar">
+    <div class="brand side-brand">
+      <div class="brand-logo">BB</div>
+      <div>
+        <div class="brand-name">Builder Book</div>
+        <div class="brand-sub">Contacts &middot; Title &middot; Concessions</div>
+      </div>
+    </div>
+    <div class="search-wrap">
+      <input id="search" type="search" placeholder="Search builders &amp; people..." autocomplete="off">
+    </div>
+    <div id="sidebar-lists"></div>
+    <div class="side-footer">
+      <button class="linkish" data-action="help">How this works</button>
+      <div class="side-footer-row">
+        <button class="linkish" data-action="export">Export to Excel</button>
+        <button class="linkish" data-action="team">Team</button>
+        <button class="linkish" data-action="signout">Sign out</button>
+      </div>
+    </div>
+  </aside>
+  <main id="main"></main>
+</div>
+
+<div id="modal-root"></div>
+<div id="toast" hidden></div>
+
+<script src="vendor/supabase.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
