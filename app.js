@@ -297,7 +297,7 @@ function renderSidebar() {
       <div class="side-item${active ? ' active' : ''}" data-action="select" data-type="b" data-id="${b.id}">
         <div class="side-item-top">
           <span class="side-item-name">${esc(b.name)}</span>
-          ${g > 0 ? `<span class="gap-badge">${g}</span>` : '<span class="ok-dot"></span>'}
+          ${g > 0 ? `<span class="gap-badge" title="${g} thing${g === 1 ? '' : 's'} not entered yet">${g}</span>` : ''}
         </div>
         <div class="side-item-sub">${esc(sub)}</div>
       </div>`;
@@ -311,9 +311,9 @@ function renderSidebar() {
       <div class="side-item${active ? ' active' : ''}" data-action="select" data-type="t" data-id="${x.id}">
         <div class="side-item-top">
           <span class="side-item-name tc">${esc(x.name)}</span>
-          ${miss > 0 ? `<span class="gap-badge">${miss}</span>` : '<span class="ok-dot"></span>'}
+          ${miss > 0 ? `<span class="gap-badge" title="${miss} thing${miss === 1 ? '' : 's'} not entered yet">${miss}</span>` : ''}
         </div>
-        <div class="side-item-sub">${esc(t(x.agent_name) ? x.agent_name : 'Escrow agent needed')}</div>
+        <div class="side-item-sub">${esc(t(x.agent_name) ? x.agent_name : 'No escrow agent yet')}</div>
       </div>`;
   }
   if (q && !builders.length && !tcs.length) html += '<div class="no-match">No matches.</div>';
@@ -324,7 +324,7 @@ function escrowBlockHtml(title, name, phone, email) {
   return `
     <div class="esc-block">
       <div class="card-label">${esc(title)}</div>
-      ${t(name) ? `<div class="who">${esc(name)}</div>` : '<div class="needed">Still needed</div>'}
+      ${t(name) ? `<div class="who">${esc(name)}</div>` : '<div class="needed">Not entered yet</div>'}
       <div class="lines">
         ${t(phone) ? `<a href="${telHref(phone)}">${esc(phone)}</a>` : ''}
         ${t(email) ? `<a href="mailto:${esc(email)}">${esc(email)}</a>` : ''}
@@ -415,12 +415,11 @@ function renderBuilder(main, b) {
 
     ${gaps.length ? `
       <div class="gap-row">
-        <span class="gap-row-label">To fill in</span>
+        <span class="gap-row-label">Not entered yet</span>
         ${gaps.map((g, i) => canWrite()
           ? `<button class="gap-chip" data-action="gap" data-idx="${i}">${esc(g.label)}</button>`
           : `<span class="gap-chip static">${esc(g.label)}</span>`).join('')}
-      </div>` : `
-      <div class="complete-row"><span class="ok-dot"></span>Profile complete, nothing missing</div>`}
+      </div>` : ''}
 
     ${t(b.comm_rules) ? `
       <div class="cc-banner"><div class="tag">CC rules</div>
@@ -622,7 +621,7 @@ function openHelpModal() {
   const steps = [
     ['Pick a builder', 'Everything on the page belongs to the builder selected on the left. Search finds builders, people, and title companies.'],
     ['Edit anything', 'Every card has an Edit button; "+ Add person" adds a contact. Changes save to the cloud instantly, so the whole team always sees the latest version.'],
-    ['Amber chips are the gap report', "They list exactly what's still blank for a builder. Click a chip to jump straight to the right form; chips disappear as info gets filled in."],
+    ['Grey chips are friendly reminders', "They list what hasn't been entered for a builder yet. Click one to jump straight to the right form. Some builders just won't have everything on file, and that's fine."],
     ['Title companies are shared', "Link a builder to a title company and its escrow team appears on the builder's page. Update the company once and every builder linked to it stays current."],
     ['Working a file?', 'Read the CC rules and Concessions before structuring or emailing. The people cards say exactly who handles builder docs, appraisals, and seller-signed items.'],
     ['Export to Excel', 'The Export button downloads the whole database as the team’s standard Excel workbook, dashboard and gap report included, in case you ever want a spreadsheet copy or an offline backup.'],
