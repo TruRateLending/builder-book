@@ -4,7 +4,7 @@ A small team web app for tracking home builders: contacts, title companies and
 escrow teams, concession rules, special processes, CC rules, and Dropbox links.
 Built for a mortgage loan processing team.
 
-Live app: https://itsaustinjordan.github.io/builder-book/
+Live app: https://truratelending.github.io/builder-book/
 
 ## How it works
 
@@ -46,7 +46,8 @@ lock itself out.
 
 ## Hosting and backend
 
-- Frontend: GitHub Pages from this repo (main branch, root).
+- Frontend: GitHub Pages from this repo (main branch, root), owned by the
+  TruRateLending GitHub account.
 - Backend: Supabase project `builder-book` (free tier). Tables: `builders`,
   `contacts`, `title_companies`, `roles`, `allowed_users`. Row level security
   allows access only to signed-in users whose email is in `allowed_users`.
