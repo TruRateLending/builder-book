@@ -53,6 +53,12 @@ lock itself out.
   allows access only to signed-in users whose email is in `allowed_users`.
 - The publishable key in `app.js` is safe to expose; row level security is
   what protects the data.
+- A scheduled GitHub Action (`.github/workflows/keep-alive.yml`) pings the
+  database twice a week so Supabase's free tier never pauses the project
+  for inactivity. It also re-enables its own schedule so GitHub does not
+  switch it off after 60 days without commits. If Supabase ever emails
+  about an upcoming pause anyway, check the repo's Actions tab and make
+  sure the "Keep Supabase awake" runs are green.
 
 ## Maintenance notes
 

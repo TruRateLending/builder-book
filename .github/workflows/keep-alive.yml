@@ -1,0 +1,37 @@
+# Pings the Supabase database twice a week so the free tier project is
+# never paused for inactivity. Runs on GitHub's servers, costs nothing,
+# and needs no maintenance. Can also be run by hand from the Actions tab.
+name: Keep Supabase awake
+
+on:
+  schedule:
+    # Mondays and Thursdays at 12:17 UTC (odd minute avoids GitHub's
+    # top-of-the-hour scheduling congestion)
+    - cron: "17 12 * * 1,4"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the database
+        # The publishable key is the same public one used by the app.
+        # Row level security returns an empty list to anonymous callers,
+        # but the query still counts as project activity for Supabase.
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://rqmuaeuqiqkhsnmashab.supabase.co/rest/v1/roles?select=name&limit=1" \
+            -H "apikey: sb_publishable_Vrs-KYaeRnKCXlhAvq_w1w_8JqcBtJq" \
+            -H "Authorization: Bearer sb_publishable_Vrs-KYaeRnKCXlhAvq_w1w_8JqcBtJq")
+          echo "Supabase responded with HTTP $code"
+          test "$code" = "200"
+
+      - name: Keep this schedule enabled
+        # GitHub switches off scheduled workflows in repos with no commits
+        # for 60 days. Re-enabling on every run resets that timer.
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/keep-alive.yml/enable"
+        env:
+          GH_TOKEN: ${{ github.token }}
