@@ -175,14 +175,18 @@ const detailsBtn = () => layoutMode() === 'wide' ? '' : `<button class="btn" dat
 function builderHtml(b) {
   const affs = affsOfBuilder(b.id);
   const tc = titleCo(b.title_company_id);
-  const actions = canWrite() ? `
+  const dbx = t(b.dropbox);
+  // The Dropbox folder is the one thing people open from a builder every day, so it sits in the header as a plain blue link.
+  const dbxMark = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M6 1.807 0 5.629l6 3.822 6.001-3.822L6 1.807zm12 0-6 3.822 6 3.822 6-3.822-6-3.822zM0 13.274l6 3.822 6.001-3.822L6 9.452l-6 3.822zm18-3.822-6 3.822 6 3.822 6-3.822-6-3.822zM6 18.371l6.001 3.822 6-3.822-6-3.822L6 18.371z"/></svg>';
+  const dbxLink = /^https?:\/\//i.test(dbx) ? `<a class="dbx" href="${esc(dbx)}" target="_blank" rel="noopener">${dbxMark}Dropbox</a>` : '';
+  const actions = dbxLink + (canWrite() ? `
     <button class="btn" data-action="new-person" data-kind="b" data-parent="${b.id}">${icon('plus')}<span>Add person</span></button>
     <button class="btn" data-action="edit-builder" data-id="${b.id}">${icon('pencil')}<span>Edit</span></button>
     ${detailsBtn()}
     ${moreMenuHtml([
       `<button data-action="link-titleco" data-id="${b.id}">${tc ? 'Change title company' : 'Link a title company'}</button>`,
       `<button class="danger" data-action="delete" data-table="builders" data-id="${b.id}">Delete builder</button>`,
-    ])}` : detailsBtn();
+    ])}` : detailsBtn());
   const tcSection = tc ? `
     <table class="grid">
       <thead><tr><th scope="col">Company</th><th scope="col" class="hide-sm w-email">Team email</th><th scope="col" class="hide-sm w-phone">Office phone</th><th scope="col" class="act"></th></tr></thead>
@@ -379,7 +383,7 @@ function builderDetailsHtml(b) {
     ${propHtml(b.id + ':uses', 'Allowed uses', b.allowed_uses, { clamp: true })}
     ${propHtml(b.id + ':sp', 'Special process', b.special_process, { clamp: true })}
     ${propHtml(b.id + ':notes', 'Notes', b.notes, { clamp: true })}
-    ${dbx ? `<div class="prop"><div class="k">Dropbox folder</div><div class="v">${isUrl ? `<a class="tbtn" href="${esc(dbx)}" target="_blank" rel="noopener">Open folder ${icon('external', 14)}</a>` : `<span class="always">${esc(dbx)} ${copyBtn(dbx)}</span>`}</div></div>` : ''}
+    ${dbx && !isUrl ? `<div class="prop"><div class="k">Dropbox folder</div><div class="v"><span class="always">${esc(dbx)} ${copyBtn(dbx)}</span></div></div>` : ''}
     ${emptyFieldsHtml(b, fields)}
   </div>
   <div class="insp-f">${metaHtml(b)}</div>`;

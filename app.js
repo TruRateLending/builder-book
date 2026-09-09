@@ -6,7 +6,7 @@
 'use strict';
 
 // Bump on every deploy, and update the ?v= numbers in index.html to match.
-const APP_VERSION = '7';
+const APP_VERSION = '8';
 
 const SUPABASE_URL = 'https://rqmuaeuqiqkhsnmashab.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Vrs-KYaeRnKCXlhAvq_w1w_8JqcBtJq';

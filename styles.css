@@ -128,10 +128,12 @@ mark { background: none; color: inherit; font-weight: 600; }
 .rec { padding: 24px; display: flex; flex-direction: column; gap: 20px; }
 .head { display: flex; align-items: center; gap: 12px; min-height: 36px; flex-wrap: wrap; }
 .head .name { font-size: 20px; line-height: 28px; font-weight: 600; margin: 0; }
-.facts { font-size: 13px; color: var(--t2); display: flex; gap: 8px; align-items: center; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.facts .dot { color: var(--border-input); }
+.facts { font-size: 13px; color: var(--t2); display: block; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.facts .dot { color: var(--border-input); margin: 0 6px; }
 .spacer { flex: 1; }
 .actions { display: flex; gap: 8px; align-items: center; position: relative; }
+.dbx { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 8px; margin-right: 4px; font-size: 14px; font-weight: 500; color: var(--accent); border-radius: 4px; }
+.dbx:hover { text-decoration: underline; }
 .back { width: 40px; height: 40px; display: none; align-items: center; justify-content: center; margin-left: -12px; color: var(--t2); }
 .sect-h { display: flex; align-items: center; gap: 8px; font-size: 16px; line-height: 22px; font-weight: 600; margin: 0 0 8px; }
 .sect-h .count { font-size: 13px; color: var(--t3); font-weight: 400; }
@@ -222,6 +224,13 @@ tr:hover .copy, .crow:hover .copy, .copy:focus-visible, .copy.done, .always .cop
 .help p { font-size: 13px; line-height: 18px; color: var(--t2); margin: 0 0 10px; }
 .help h4 { font-size: 13px; font-weight: 600; margin: 14px 0 4px; }
 
+/* desktop and laptop: the header stays one line; the facts give way before the actions wrap */
+@media (min-width: 960px) {
+  .facts { flex: 1 1 0; }
+  .head .spacer { display: none; }
+  .actions { margin-left: auto; }
+}
+
 /* ---------------------------------------------------------------- mid: 960 to 1439px, inspector becomes an overlay */
 @media (max-width: 1439px) {
   :root { --rail: 64px; --list: 220px; }
@@ -255,7 +264,7 @@ tr:hover .copy, .crow:hover .copy, .copy:focus-visible, .copy.done, .always .cop
   .back { display: inline-flex; }
   .rec { padding: 16px; gap: 16px; }
   .head .name { font-size: 18px; }
-  .facts { white-space: normal; flex-wrap: wrap; }
+  .facts { white-space: normal; }
   .actions .btn:not(.icon) span { display: none; }
   .actions .btn:not(.icon) { width: 32px; padding: 0; justify-content: center; }
   table.grid th.hide-sm, table.grid td.hide-sm { display: none; }
