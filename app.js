@@ -545,7 +545,7 @@ function renderGeneral(main, g) {
       </div>
       <div class="card">
         <div class="card-label">Notes</div>
-        <div class="card-text">${esc(t(g.notes) || 'Nothing entered yet.')}</div>
+        <div class="card-text">${esc(t(g.notes) || '—')}</div>
       </div>
     </div>
   </div>`;
