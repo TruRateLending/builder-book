@@ -82,10 +82,12 @@ function readForm(form) {
     out[el.dataset.f] = el.type === 'checkbox' ? el.checked : t(el.value);
   });
   $$('[data-rows]', form).forEach(group => {
-    out[group.dataset.rows] = $$('.rrow', group).map(r => ({
-      label: t($('[data-rf="label"]', r) && $('[data-rf="label"]', r).value),
-      value: t($('[data-rf="value"]', r) && $('[data-rf="value"]', r).value),
-    })).filter(x => x.value);
+    out[group.dataset.rows] = $$('.rrow', group).map(r => {
+      const pick = (name) => { const el = $(`[data-rf="${name}"]`, r); return el ? t(el.value) : ''; };
+      const ext = digitsOf(pick('ext'));
+      const number = pick('value');
+      return { label: pick('label'), value: number && ext ? `${number} x${ext}` : number };   // the extension travels inside the value
+    }).filter(x => x.value);
   });
   return out;
 }
@@ -122,15 +124,18 @@ function fieldHtml(label, name, value, opts) {
   return `<label class="field"><span>${esc(label)}</span>${control}${o.hint ? `<div class="hint" style="margin-top:4px;">${esc(o.hint)}</div>` : ''}</label>`;
 }
 function rowsFieldHtml(kind, items, labels) {
-  const rows = (items && items.length ? items : [{ label: labels[0], value: '' }]).map((x, i) => `
-    <div class="rrow">
+  const rows = (items && items.length ? items : [{ label: labels[0], value: '' }]).map((x, i) => {
+    const parts = kind === 'phones' ? splitExt(x.value) : { number: x.value || '', ext: '' };
+    return `
+    <div class="rrow ${kind === 'phones' ? 'phone' : ''}">
       <select data-rf="label" aria-label="${kind === 'phones' ? 'Phone type' : 'Email type'}">
         ${[''].concat(labels).map(l => `<option value="${esc(l)}" ${ci(l) === ci(x.label) ? 'selected' : ''}>${esc(l || 'No label')}</option>`).join('')}
         ${x.label && !labels.some(l => ci(l) === ci(x.label)) ? `<option value="${esc(x.label)}" selected>${esc(x.label)}</option>` : ''}
       </select>
-      <input data-rf="value" type="${kind === 'phones' ? 'tel' : 'email'}" value="${esc(x.value || '')}" placeholder="${kind === 'phones' ? '915-555-0100' : 'name@company.com'}" aria-label="${kind === 'phones' ? 'Phone number' : 'Email address'}">
+      <input data-rf="value" type="${kind === 'phones' ? 'tel' : 'email'}" value="${esc(parts.number)}" placeholder="${kind === 'phones' ? '915-555-0100' : 'name@company.com'}" aria-label="${kind === 'phones' ? 'Phone number' : 'Email address'}">
+      ${kind === 'phones' ? `<input data-rf="ext" type="text" inputmode="numeric" value="${esc(parts.ext)}" placeholder="Ext." aria-label="Extension">` : ''}
       <button type="button" class="del" data-action="del-row" aria-label="Remove">${icon('x', 14)}</button>
-    </div>`).join('');
+    </div>`; }).join('');
   return `<div class="field rows-field" data-rows="${kind}"><span>${kind === 'phones' ? 'Phones' : 'Emails'}</span>${rows}
     <button type="button" class="tbtn" data-action="add-row" data-kind="${kind}">Add ${kind === 'phones' ? 'phone' : 'email'}</button></div>`;
 }
@@ -200,7 +205,7 @@ function formHtml() {
       ${fieldHtml('Handles', 'handles', d.handles, { textarea: true, rows: 2, ph: 'What they handle here, when to contact them' })}
       ${kind === 'b' ? checkHtml('always_cc', 'Always CC on emails to this builder', d.always_cc) : ''}`;
     const buttons = `${a ? `<button type="button" class="btn danger" data-action="remove-aff" data-id="${a.id}">Remove from ${esc(parentName(a))}</button>` : ''}<span class="spacer"></span>${cancelBtn()}${saveBtn(f)}`;
-    return `${head(a ? 'Edit link' : 'Link to an organisation')}<form id="insp-form" data-form="aff" novalidate class="insp-b">${body}</form>${footerHtml(f, buttons)}`;
+    return `${head(a ? 'Edit link' : 'Link to an organization')}<form id="insp-form" data-form="aff" novalidate class="insp-b">${body}</form>${footerHtml(f, buttons)}`;
   }
 
   if (f.kind === 'builder') {

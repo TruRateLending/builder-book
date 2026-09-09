@@ -109,6 +109,7 @@ mark { background: none; color: inherit; font-weight: 600; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 14px; }
 .check input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
 .rows-field .rrow { display: grid; grid-template-columns: 104px minmax(0, 1fr) 28px; gap: 6px; margin-bottom: 6px; align-items: center; }
+.rows-field .rrow.phone { grid-template-columns: 88px minmax(0, 1fr) 56px 28px; }
 .rows-field .rrow select, .rows-field .rrow input { min-height: 32px; }
 .rows-field .del { width: 28px; height: 28px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; color: var(--t3); }
 .rows-field .del:hover { background: var(--hover); color: var(--t1); }

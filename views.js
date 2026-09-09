@@ -250,7 +250,7 @@ function personHtml(p) {
   const nb = affs.filter(a => a.builder_id).length, nt = affs.filter(a => a.title_company_id).length;
   const facts = [affs.length ? affs[0].role : t(p.company), nb ? plural(nb, 'builder') : '', nt ? plural(nt, 'title company', 'title companies') : ''];
   const actions = canWrite() ? `
-    <button class="btn" data-action="new-aff" data-person="${p.id}">${icon('plus')}<span>Link to organisation</span></button>
+    <button class="btn" data-action="new-aff" data-person="${p.id}">${icon('plus')}<span>Link to organization</span></button>
     <button class="btn" data-action="edit-person" data-id="${p.id}">${icon('pencil')}<span>Edit</span></button>
     ${detailsBtn()}
     ${moreMenuHtml([`<button class="danger" data-action="delete" data-table="people" data-id="${p.id}">Delete ${esc(p.name)}</button>`])}` : detailsBtn();
@@ -280,9 +280,9 @@ function personHtml(p) {
         : '<tr class="empty"><td>No phone or email recorded</td></tr>'}</tbody></table>
     </section>
     <section>
-      <h2 class="sect-h">Organisations <span class="count">${affs.length}</span></h2>
+      <h2 class="sect-h">Organizations <span class="count">${affs.length}</span></h2>
       <table class="grid">
-        <thead><tr><th scope="col" class="w-org">Organisation</th><th scope="col" class="w-role">Role</th><th scope="col" class="hide-sm">Handles</th><th scope="col" class="c hide-sm" title="Always CC">CC</th><th scope="col" class="act hide-sm"></th></tr></thead>
+        <thead><tr><th scope="col" class="w-org">Organization</th><th scope="col" class="w-role">Role</th><th scope="col" class="hide-sm">Handles</th><th scope="col" class="c hide-sm" title="Always CC">CC</th><th scope="col" class="act hide-sm"></th></tr></thead>
         <tbody>${orgRows || '<tr class="empty"><td colspan="5">Not linked to any builder or title company</td></tr>'}</tbody>
       </table>
     </section>
@@ -331,7 +331,7 @@ function renderInsp() {
     else if (cur.kind === 'tc') html = companyDetailsHtml(cur.rec);
     else {
       const first = affsOfPerson(cur.rec.id)[0];
-      html = first ? orgSummaryHtml(first, cur.rec, '') : `<div class="insp-h"><span class="t">Details</span></div><div class="insp-empty">Not linked to any builder or title company.${canWrite() ? ' Use Link to organisation.' : ''}</div>`;
+      html = first ? orgSummaryHtml(first, cur.rec, '') : `<div class="insp-h"><span class="t">Details</span></div><div class="insp-empty">Not linked to any builder or title company.${canWrite() ? ' Use Link to organization.' : ''}</div>`;
     }
   }
   insp.innerHTML = html;
@@ -420,7 +420,7 @@ function personCardHtml(p, cur, closeX) {
   </div>
   <div class="insp-f">${canWrite() ? `<button class="btn" data-action="edit-person" data-id="${p.id}" data-aff="${here ? here.id : ''}">Edit</button>${here ? `<button class="btn danger" data-action="remove-aff" data-id="${here.id}">Remove from ${esc(par ? par.name : 'here')}</button>` : ''}` : ''}<span class="spacer"></span>${metaHtml(p)}</div>`;
 }
-/* An organisation selected inside a person record: what this person does there, plus the essentials. */
+/* An organization selected inside a person record: what this person does there, plus the essentials. */
 function orgSummaryHtml(a, p, closeX) {
   const par = parentOf(a);
   if (!par) return `<div class="insp-empty">This link points nowhere.</div>`;

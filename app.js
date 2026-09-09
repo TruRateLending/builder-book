@@ -6,7 +6,7 @@
 'use strict';
 
 // Bump on every deploy, and update the ?v= numbers in index.html to match.
-const APP_VERSION = '3';
+const APP_VERSION = '4';
 
 const SUPABASE_URL = 'https://rqmuaeuqiqkhsnmashab.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Vrs-KYaeRnKCXlhAvq_w1w_8JqcBtJq';
@@ -61,21 +61,24 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || one + 's')}`;
 
 /* Phone numbers display as 915-555-0100, with an extension as " x123". Anything that
    is not a plain US number is shown as typed. */
+/* "915-555-0100 x123", "915-555-0100 ext. 123" and "915-555-0100 extension 123" all split into the number and "123". */
+function splitExt(raw) {
+  const s = t(raw);
+  const m = s.match(/^(.*?)(?:\s*(?:ext\.?|x|extension)\s*(\d+))?$/i);
+  return { number: m ? t(m[1]) : s, ext: m && m[2] ? m[2] : '' };
+}
 function fmtPhone(raw) {
   const s = t(raw);
   if (!s) return '';
-  const m = s.match(/^(.*?)(?:\s*(?:ext\.?|x|extension)\s*(\d+))?$/i);
-  const ext = m && m[2] ? m[2] : '';
-  let d = digitsOf(m ? m[1] : s);
+  const { number, ext } = splitExt(s);
+  let d = digitsOf(number);
   if (d.length === 11 && d[0] === '1') d = d.slice(1);
   if (d.length !== 10) return s;
   return `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}${ext ? ' x' + ext : ''}`;
 }
 function telHref(raw) {
-  const s = t(raw);
-  const m = s.match(/^(.*?)(?:\s*(?:ext\.?|x|extension)\s*(\d+))?$/i);
-  const ext = m && m[2] ? m[2] : '';
-  let d = digitsOf(m ? m[1] : s);
+  const { number, ext } = splitExt(raw);
+  let d = digitsOf(number);
   if (d.length === 10) d = '1' + d;
   const intl = d.length === 11 && d[0] === '1';       // only a full North American number gets the +1 prefix
   return 'tel:' + (intl ? '+' : '') + d + (ext ? ';ext=' + ext : '');
