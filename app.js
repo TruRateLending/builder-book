@@ -1,8 +1,10 @@
-/* Builder Book - team builder database.
+/* TRL Contacts - team database for builders, title companies, and contacts.
    Plain JavaScript, no build step. To change the backend, edit the two
    constants below. Data lives in Supabase; this page holds no data itself. */
 
 'use strict';
+
+const MAX_TITLE_CONTACTS = 6;   // how many people one title company can hold
 
 const SUPABASE_URL = 'https://rqmuaeuqiqkhsnmashab.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Vrs-KYaeRnKCXlhAvq_w1w_8JqcBtJq';
@@ -17,11 +19,13 @@ const state = {
   authView: 'signin',     // signin | signup | forgot | recovery | pending
   authMsg: null,          // {text, err}
   builders: [],
-  contacts: [],
+  contacts: [],           // people attached to a builder
   titleCompanies: [],
+  titleContacts: [],      // people attached to a title company
+  general: [],            // standalone contacts, not tied to a builder
   roles: [],
   team: [],               // [{email, access}]
-  sel: null,              // {type:'b'|'t', id}
+  sel: null,              // {type:'b'|'t'|'g', id}
   q: '',
 };
 
@@ -194,14 +198,16 @@ async function handleAuth(action) {
 
 // ------------------------------------------------------------------ data
 async function loadAll() {
-  const [b, c, tc, r, team] = await Promise.all([
+  const [b, c, tc, tcp, gen, r, team] = await Promise.all([
     db.from('builders').select('*').order('name'),
     db.from('contacts').select('*'),
     db.from('title_companies').select('*').order('name'),
+    db.from('title_contacts').select('*'),
+    db.from('general_contacts').select('*').order('name'),
     db.from('roles').select('*').order('position'),
     db.from('allowed_users').select('email, access').order('email'),
   ]);
-  for (const res of [b, c, tc, r, team]) {
+  for (const res of [b, c, tc, tcp, gen, r, team]) {
     if (res.error) { toast('Load failed: ' + friendlyError(res.error), true); return; }
   }
   if (team.data.length === 0) {   // access was revoked while signed in
@@ -214,13 +220,16 @@ async function loadAll() {
   state.builders = b.data;
   state.contacts = c.data;
   state.titleCompanies = tc.data;
+  state.titleContacts = tcp.data;
+  state.general = gen.data;
   state.roles = r.data;
 }
 
 async function refresh() {
   await loadAll();
   if (!state.allowed) return;
-  const list = state.sel && state.sel.type === 'b' ? state.builders : state.titleCompanies;
+  const lists = { b: state.builders, t: state.titleCompanies, g: state.general };
+  const list = state.sel ? lists[state.sel.type] : null;
   if (state.sel && !list.some(x => x.id === state.sel.id)) {
     state.sel = state.builders.length ? { type: 'b', id: state.builders[0].id } : null;
   }
@@ -228,6 +237,14 @@ async function refresh() {
 }
 
 const tcById = (id) => state.titleCompanies.find(x => x.id === id) || null;
+const genById = (id) => state.general.find(x => x.id === id) || null;
+
+/* A title company's people, in the order they were added. */
+const titleContactsOf = (tcId) => state.titleContacts
+  .filter(c => c.title_company_id === tcId)
+  .sort((a, b) => (a.position || 0) - (b.position || 0) || a.name.localeCompare(b.name));
+
+const titleTeam = (tc) => (tc ? titleContactsOf(tc.id) : []);
 const contactsOf = (id) => {
   const rank = (role) => {
     const i = state.roles.findIndex(r => r.name === role);
@@ -236,31 +253,6 @@ const contactsOf = (id) => {
   return state.contacts.filter(c => c.builder_id === id)
     .sort((a, b) => rank(a.role) - rank(b.role) || a.name.localeCompare(b.name));
 };
-
-/* Gap logic - same rules as the "To Fill In" tab of the Excel workbook. */
-function gapsFor(b) {
-  const cs = state.contacts.filter(c => c.builder_id === b.id);
-  const tc = tcById(b.title_company_id);
-  const roleHas = (frag) => cs.some(c => ci(c.role).includes(frag));
-  const roleStarts = (frag) => cs.some(c => ci(c.role).startsWith(frag));
-  const handlesHas = (frag) => cs.some(c => ci(c.handles).includes(frag));
-  const g = [];
-  const openB = { kind: 'builder', id: b.id };
-  const openRole = (role) => ({ kind: 'contact', builderId: b.id, role });
-  const openT = tc ? { kind: 'titleco', id: tc.id } : openB;
-  if (!tc) g.push({ label: 'Title company', go: openB });
-  if (!t(b.dropbox)) g.push({ label: 'Dropbox', go: openB });
-  if (!t(b.concession)) g.push({ label: 'Concession terms', go: openB });
-  if (!t(b.allowed_uses)) g.push({ label: 'Allowed uses', go: openB });
-  if (!roleHas('owner') && !handlesHas('owner')) g.push({ label: 'Owner', go: openRole('Owner') });
-  if (!roleHas('listing') && !handlesHas('listing agent')) g.push({ label: 'Listing agent', go: openRole('Listing Agent') });
-  if (!roleHas('builder rep') && !roleStarts('sales')) g.push({ label: 'Builder rep', go: openRole('Builder Rep') });
-  if (!roleHas('docs') && !handlesHas('builder doc')) g.push({ label: 'Builder docs POC', go: openRole('Builder Docs POC') });
-  if (!roleHas('appraisal') && !handlesHas('apprais')) g.push({ label: 'Appraisal POC', go: openRole('Appraisal POC') });
-  if (!tc || !t(tc.agent_name)) g.push({ label: 'Escrow agent', go: openT });
-  if (!tc || !t(tc.asst_name)) g.push({ label: 'Escrow assistant', go: openT });
-  return g;
-}
 
 // ------------------------------------------------------------------ render
 function render() {
@@ -281,68 +273,101 @@ function renderSidebar() {
     if (tc && ci(tc.name).includes(q)) return true;
     return state.contacts.some(c => c.builder_id === b.id && cMatch(c));
   });
-  const tcs = state.titleCompanies.filter(x => !q || ci(x.name + ' ' + x.agent_name).includes(q));
+  const tcs = state.titleCompanies.filter(x => !q || ci(x.name).includes(q)
+    || titleTeam(x).some(p => ci(`${p.name} ${p.role} ${p.email} ${p.phone}`).includes(q)));
+  const gens = state.general.filter(x => !q
+    || ci(`${x.name} ${x.company} ${x.email} ${x.email_2} ${x.phone} ${x.phone_2}`).includes(q));
 
   const newBtn = (action) => canWrite() ? `<button data-action="${action}">+ New</button>` : '';
   let html = `
     <div class="side-heading"><span>Builders</span>${newBtn('new-builder')}</div>`;
   for (const b of builders) {
     const active = state.sel && state.sel.type === 'b' && state.sel.id === b.id;
-    const g = gapsFor(b).length;
     const tc = tcById(b.title_company_id);
     const m = q && !ci(b.name).includes(q)
       ? state.contacts.find(c => c.builder_id === b.id && cMatch(c)) : null;
-    const sub = m ? `↳ ${m.name} · ${m.role}` : (tc ? tc.name : 'No title company yet');
+    const sub = m ? `↳ ${m.name} · ${m.role}` : (tc ? tc.name : '');
     html += `
       <div class="side-item${active ? ' active' : ''}" data-action="select" data-type="b" data-id="${b.id}">
         <div class="side-item-top">
           <span class="side-item-name">${esc(b.name)}</span>
-          ${g > 0 ? `<span class="gap-badge" title="${g} thing${g === 1 ? '' : 's'} not entered yet">${g}</span>` : ''}
         </div>
-        <div class="side-item-sub">${esc(sub)}</div>
+        ${sub ? `<div class="side-item-sub">${esc(sub)}</div>` : ''}
       </div>`;
   }
   html += `
     <div class="side-heading" style="margin-top:20px"><span>Title companies</span>${newBtn('new-titleco')}</div>`;
   for (const x of tcs) {
     const active = state.sel && state.sel.type === 't' && state.sel.id === x.id;
-    const miss = (t(x.agent_name) ? 0 : 1) + (t(x.asst_name) ? 0 : 1);
+    const team = titleTeam(x);
+    const agent = team.find(p => ci(p.role).includes('agent'));
+    const sub = agent ? agent.name : (team.length ? team[0].name : '');
     html += `
       <div class="side-item${active ? ' active' : ''}" data-action="select" data-type="t" data-id="${x.id}">
         <div class="side-item-top">
           <span class="side-item-name tc">${esc(x.name)}</span>
-          ${miss > 0 ? `<span class="gap-badge" title="${miss} thing${miss === 1 ? '' : 's'} not entered yet">${miss}</span>` : ''}
         </div>
-        <div class="side-item-sub">${esc(t(x.agent_name) ? x.agent_name : 'No escrow agent yet')}</div>
+        ${sub ? `<div class="side-item-sub">${esc(sub)}</div>` : ''}
       </div>`;
   }
-  if (q && !builders.length && !tcs.length) html += '<div class="no-match">No matches.</div>';
+  html += `
+    <div class="side-heading" style="margin-top:20px"><span>Contacts</span>${newBtn('new-general')}</div>`;
+  for (const x of gens) {
+    const active = state.sel && state.sel.type === 'g' && state.sel.id === x.id;
+    const sub = t(x.company) || t(x.phone) || t(x.email);
+    html += `
+      <div class="side-item${active ? ' active' : ''}" data-action="select" data-type="g" data-id="${x.id}">
+        <div class="side-item-top">
+          <span class="side-item-name tc">${esc(x.name)}</span>
+        </div>
+        ${sub ? `<div class="side-item-sub">${esc(sub)}</div>` : ''}
+      </div>`;
+  }
+  if (!state.general.length) {
+    html += '<div class="no-match">Nobody here yet. Use + New for people who are not tied to one builder.</div>';
+  }
+  if (q && !builders.length && !tcs.length && !gens.length) html += '<div class="no-match">No matches.</div>';
   $('#sidebar-lists').innerHTML = html;
 }
 
-function escrowBlockHtml(title, name, phone, email) {
+function titleContactBlockHtml(p) {
   return `
     <div class="esc-block">
-      <div class="card-label">${esc(title)}</div>
-      ${t(name) ? `<div class="who">${esc(name)}</div>` : '<div class="needed">Not entered yet</div>'}
-      <div class="lines">
-        ${t(phone) ? `<a href="${telHref(phone)}">${esc(phone)}</a>` : ''}
-        ${t(email) ? `<a href="mailto:${esc(email)}">${esc(email)}</a>` : ''}
+      <div class="esc-top">
+        <div class="card-label">${esc(t(p.role) || 'Contact')}</div>
+        ${canWrite() ? `<button class="edit-link" data-action="edit-titlecontact" data-id="${p.id}">Edit</button>` : ''}
       </div>
+      ${t(p.name) ? `<div class="who">${esc(p.name)}</div>` : ''}
+      <div class="lines">
+        ${t(p.phone) ? `<a href="${telHref(p.phone)}">${esc(p.phone)}</a>` : ''}
+        ${t(p.email) ? `<a href="mailto:${esc(p.email)}">${esc(p.email)}</a>` : ''}
+      </div>
+      ${t(p.notes) ? `<div class="esc-note-line">${esc(p.notes)}</div>` : ''}
     </div>`;
 }
 
 function escrowSectionHtml(tc) {
+  const team = titleTeam(tc);
+  const room = MAX_TITLE_CONTACTS - team.length;
+  const canAdd = canWrite();
   const cells = [
     ['Team / group email', tc.team_email, tc.team_email ? `mailto:${tc.team_email}` : null],
     ['Office phone', tc.office_phone, tc.office_phone ? telHref(tc.office_phone) : null],
     ['Office address', tc.office_address, null],
   ];
   return `
-    <div class="esc-grid">
-      ${escrowBlockHtml('Escrow agent', tc.agent_name, tc.agent_phone, tc.agent_email)}
-      ${escrowBlockHtml('Escrow assistant', tc.asst_name, tc.asst_phone, tc.asst_email)}
+    <div class="section-head" style="margin:22px 0 0">
+      <div style="display:flex;align-items:baseline">
+        <div class="card-label">Escrow &amp; title team</div>
+        <span class="count">${team.length} of ${MAX_TITLE_CONTACTS}</span>
+      </div>
+      ${canAdd && room > 0
+        ? `<button class="btn-ghost" data-action="new-titlecontact" data-tc="${tc.id}">+ Add contact</button>`
+        : (canAdd ? `<span class="slots-left">All ${MAX_TITLE_CONTACTS} slots used</span>` : '')}
     </div>
+    ${team.length
+      ? `<div class="esc-grid">${team.map(titleContactBlockHtml).join('')}</div>`
+      : '<div class="empty-box" style="margin-top:12px">No people here yet.</div>'}
     <div class="info-grid">
       ${cells.map(([label, val, href]) => `
         <div class="info-cell">
@@ -368,13 +393,13 @@ function renderMain() {
     return;
   }
   if (sel.type === 't') { renderTitleCo(main, tcById(sel.id)); return; }
+  if (sel.type === 'g') { renderGeneral(main, genById(sel.id)); return; }
   renderBuilder(main, state.builders.find(b => b.id === sel.id));
 }
 
 function renderBuilder(main, b) {
   if (!b) { state.sel = null; renderMain(); return; }
   const tc = tcById(b.title_company_id);
-  const gaps = gapsFor(b);
   const people = contactsOf(b.id);
   const dbx = t(b.dropbox);
   const dbxIsUrl = /^https?:\/\//i.test(dbx);
@@ -413,37 +438,11 @@ function renderBuilder(main, b) {
       </div>
     </div>
 
-    ${gaps.length ? `
-      <div class="gap-row">
-        <span class="gap-row-label">Not entered yet</span>
-        ${gaps.map((g, i) => canWrite()
-          ? `<button class="gap-chip" data-action="gap" data-idx="${i}">${esc(g.label)}</button>`
-          : `<span class="gap-chip static">${esc(g.label)}</span>`).join('')}
-      </div>` : ''}
-
     ${t(b.comm_rules) ? `
       <div class="cc-banner"><div class="tag">CC rules</div>
         <div class="body">${esc(b.comm_rules)}</div></div>` : ''}
 
-    <div class="card-grid">
-      <div class="card">
-        <div class="card-label">Concessions</div>
-        <div class="card-big">${esc(t(b.concession) || '—')}</div>
-        ${t(b.calc_from) ? `<div class="card-note">calculated from ${esc(b.calc_from)}</div>` : ''}
-        <div class="card-divider"></div>
-        <div class="card-label">Allowed uses &amp; details</div>
-        <div class="card-text">${esc(t(b.allowed_uses) || 'Not entered yet.')}</div>
-      </div>
-      <div class="card">
-        <div class="card-label">Special process &amp; incentives</div>
-        <div class="card-text">${esc(t(b.special_process) || 'Not entered yet.')}</div>
-        <div class="card-divider"></div>
-        <div class="card-label">General notes</div>
-        <div class="card-text">${esc(t(b.notes) || '—')}</div>
-      </div>
-    </div>
-
-    <div class="section-head">
+    <div class="section-head" style="margin-top:26px">
       <div style="display:flex;align-items:baseline">
         <h2>People</h2>
         <span class="count">${people.length} ${people.length === 1 ? 'person' : 'people'}</span>
@@ -452,7 +451,27 @@ function renderBuilder(main, b) {
     </div>
     ${people.length
       ? `<div class="people-grid">${peopleCards}</div>`
-      : '<div class="empty-box">No people entered for this builder yet.</div>'}
+      : `<div class="empty-box">No people here yet.${canWrite()
+          ? ` <button class="linkish" style="font-size:13.5px;font-weight:700" data-action="new-contact" data-builder="${b.id}">Add the first person</button>`
+          : ''}</div>`}
+
+    <div class="card-grid">
+      <div class="card">
+        <div class="card-label">Concessions</div>
+        <div class="card-big">${esc(t(b.concession) || '—')}</div>
+        ${t(b.calc_from) ? `<div class="card-note">calculated from ${esc(b.calc_from)}</div>` : ''}
+        <div class="card-divider"></div>
+        <div class="card-label">Allowed uses &amp; details</div>
+        <div class="card-text">${esc(t(b.allowed_uses) || '—')}</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Special process &amp; incentives</div>
+        <div class="card-text">${esc(t(b.special_process) || '—')}</div>
+        <div class="card-divider"></div>
+        <div class="card-label">General notes</div>
+        <div class="card-text">${esc(t(b.notes) || '—')}</div>
+      </div>
+    </div>
 
     <div class="section-head">
       <h2>Title &amp; escrow</h2>
@@ -495,9 +514,44 @@ function renderTitleCo(main, tc) {
   </div>`;
 }
 
-// ------------------------------------------------------------------ modals
-let currentGaps = [];
+function renderGeneral(main, g) {
+  if (!g) { state.sel = null; renderMain(); return; }
+  const phones = [g.phone, g.phone_2].map(t).filter(Boolean);
+  const emails = [g.email, g.email_2].map(t).filter(Boolean);
+  const line = (val, href) => `<a href="${esc(href)}">${esc(val)}</a>`;
+  main.innerHTML = `
+  <div class="page">
+    <div class="page-head">
+      <div style="min-width:0">
+        <div class="kicker">Contact</div>
+        <h1>${esc(g.name)}</h1>
+        ${t(g.company) ? `<div class="person-company" style="margin-top:8px">${esc(g.company)}</div>` : ''}
+      </div>
+      <div class="page-head-actions">
+        ${canWrite() ? `<button class="btn-ghost" data-action="edit-general" data-id="${g.id}">Edit contact</button>` : ''}
+      </div>
+    </div>
+    <div class="card-grid">
+      <div class="card">
+        <div class="card-label">Phone</div>
+        <div class="lines" style="margin-top:8px">
+          ${phones.length ? phones.map(p => line(p, telHref(p))).join('') : '<div class="val">—</div>'}
+        </div>
+        <div class="card-divider"></div>
+        <div class="card-label">Email</div>
+        <div class="lines" style="margin-top:8px">
+          ${emails.length ? emails.map(e => line(e, 'mailto:' + e)).join('') : '<div class="val">—</div>'}
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-label">Notes</div>
+        <div class="card-text">${esc(t(g.notes) || 'Nothing entered yet.')}</div>
+      </div>
+    </div>
+  </div>`;
+}
 
+// ------------------------------------------------------------------ modals
 function closeModal() { $('#modal-root').innerHTML = ''; }
 
 function modalShell(title, inner, opts = {}) {
@@ -514,7 +568,8 @@ function modalShell(title, inner, opts = {}) {
 }
 
 function field(label, name, value, opts = {}) {
-  const attrs = `data-f="${name}" ${opts.ph ? `placeholder="${esc(opts.ph)}"` : ''}`;
+  const attrs = `data-f="${name}" ${opts.ph ? `placeholder="${esc(opts.ph)}"` : ''}`
+    + (opts.list ? ` list="${esc(opts.list)}"` : '');
   if (opts.textarea) {
     return `<label class="form-field"><span class="form-label">${esc(label)}</span>
       <textarea ${attrs} rows="${opts.rows || 3}">${esc(value || '')}</textarea></label>`;
@@ -597,32 +652,78 @@ function openTitleCoModal(id) {
   modalShell(x ? 'Edit title company' : 'New title company', `
     <div data-form="titleco" data-id="${id || ''}">
       ${field('Company name', 'name', x && x.name, { ph: 'e.g. Stewart Title - Mary Cherry' })}
-      <div class="form-grid-3">
-        ${field('Escrow agent', 'agent_name', x && x.agent_name, { ph: 'Name' })}
-        ${field('Phone', 'agent_phone', x && x.agent_phone)}
-        ${field('Email', 'agent_email', x && x.agent_email)}
-      </div>
-      <div class="form-grid-3">
-        ${field('Escrow assistant', 'asst_name', x && x.asst_name, { ph: 'Name' })}
-        ${field('Phone', 'asst_phone', x && x.asst_phone)}
-        ${field('Email', 'asst_email', x && x.asst_email)}
-      </div>
       <div class="form-grid-2">
         ${field('Team / group email', 'team_email', x && x.team_email)}
         ${field('Office phone', 'office_phone', x && x.office_phone)}
       </div>
       ${field('Office address', 'office_address', x && x.office_address)}
       ${field('Notes', 'notes', x && x.notes, { textarea: true, rows: 2 })}
+      <div class="roles-note">${x
+        ? `People are added on the company page, up to ${MAX_TITLE_CONTACTS} of them.`
+        : `Save the company first, then add its people on its page, up to ${MAX_TITLE_CONTACTS} of them.`}</div>
       ${actionsHtml(x ? 'Delete company' : null, 'save-titleco')}
+    </div>`);
+}
+
+/* Common title roles. Typed values are allowed too - the list is only a shortcut,
+   so a new kind of contact never needs a code change. */
+const TITLE_ROLE_SUGGESTIONS = ['Escrow Agent', 'Escrow Assistant', 'Closer',
+  'Title Officer', 'Processor', 'Post Closer'];
+
+function openTitleContactModal(id, preset = {}) {
+  const p = id ? state.titleContacts.find(x => x.id === id) : null;
+  const tcId = p ? p.title_company_id : preset.tcId;
+  const tc = tcById(tcId);
+  if (!p && titleContactsOf(tcId).length >= MAX_TITLE_CONTACTS) {
+    toast(`${tc ? tc.name : 'This company'} already has ${MAX_TITLE_CONTACTS} contacts.`, true);
+    return;
+  }
+  modalShell(p ? 'Edit title contact' : 'Add title contact', `
+    <div data-form="titlecontact" data-id="${id || ''}" data-tc="${esc(tcId || '')}">
+      <div class="roles-note">${esc(tc ? tc.name : 'Title company')}</div>
+      <div class="form-grid-2">
+        ${field('Name', 'name', p && p.name, { ph: 'Full name' })}
+        ${field('Role', 'role', p ? p.role : preset.role, { ph: 'e.g. Escrow Agent', list: 'title-roles' })}
+      </div>
+      <datalist id="title-roles">
+        ${TITLE_ROLE_SUGGESTIONS.map(r => `<option value="${esc(r)}"></option>`).join('')}
+      </datalist>
+      <div class="form-grid-2">
+        ${field('Phone', 'phone', p && p.phone, { ph: '915-...' })}
+        ${field('Email', 'email', p && p.email, { ph: 'name@...' })}
+      </div>
+      ${field('Notes', 'notes', p && p.notes, { textarea: true, rows: 2 })}
+      ${actionsHtml(p ? 'Remove contact' : null, 'save-titlecontact')}
+    </div>`);
+}
+
+function openGeneralModal(id) {
+  const g = id ? genById(id) : null;
+  modalShell(g ? 'Edit contact' : 'New contact', `
+    <div data-form="general" data-id="${id || ''}">
+      <div class="form-grid-2">
+        ${field('Name', 'name', g && g.name, { ph: 'Full name' })}
+        ${field('Company or role', 'company', g && g.company, { ph: 'optional' })}
+      </div>
+      <div class="form-grid-2">
+        ${field('Phone', 'phone', g && g.phone, { ph: '915-...' })}
+        ${field('Second phone', 'phone_2', g && g.phone_2, { ph: 'optional' })}
+      </div>
+      <div class="form-grid-2">
+        ${field('Email', 'email', g && g.email, { ph: 'name@...' })}
+        ${field('Second email', 'email_2', g && g.email_2, { ph: 'optional' })}
+      </div>
+      ${field('Notes', 'notes', g && g.notes, { textarea: true, rows: 4 })}
+      ${actionsHtml(g ? 'Remove contact' : null, 'save-general')}
     </div>`);
 }
 
 function openHelpModal() {
   const steps = [
-    ['Pick a builder', 'Everything on the page belongs to the builder selected on the left. Search finds builders, people, and title companies.'],
-    ['Edit anything', 'Every card has an Edit button; "+ Add person" adds a contact. Changes save to the cloud instantly, so the whole team always sees the latest version.'],
-    ['Grey chips are friendly reminders', "They list what hasn't been entered for a builder yet. Click one to jump straight to the right form. Some builders just won't have everything on file, and that's fine."],
-    ['Title companies are shared', "Link a builder to a title company and its escrow team appears on the builder's page. Update the company once and every builder linked to it stays current."],
+    ['Pick a builder', 'Everything on the page belongs to the builder selected on the left. Search finds builders, people, title companies, and contacts.'],
+    ['People come first', 'A builder\'s people are listed at the top of their page. "+ Add person" adds another one right there. Changes save to the cloud instantly, so the whole team always sees the latest version.'],
+    ['Title companies are shared', `Link a builder to a title company and its escrow team appears on the builder's page. Each company holds up to ${MAX_TITLE_CONTACTS} people. Update the company once and every builder linked to it stays current.`],
+    ['Contacts', 'The Contacts list at the bottom of the sidebar is for people who are not tied to one builder. Two phone numbers, two emails, and a notes field each.'],
     ['Working a file?', 'Read the CC rules and Concessions before structuring or emailing. The people cards say exactly who handles builder docs, appraisals, and seller-signed items.'],
     ['Export to Excel', 'The Export button downloads the whole database as the team’s standard Excel workbook, dashboard and gap report included, in case you ever want a spreadsheet copy or an offline backup.'],
   ];
@@ -674,7 +775,7 @@ function openRolesModal() {
   modalShell('Roles', `
     <div data-form="roles">
       <div class="roles-note">These feed the Role dropdown on people. Renaming or removing a role
-        does not change people already saved with it. The Excel export includes the first 9 roles.</div>
+        does not change people already saved with it. The Excel export includes the first 30 roles.</div>
       <div class="team-list">
         ${state.roles.map((r, i) => `
           <div class="team-row">
@@ -736,6 +837,30 @@ async function handleSave(kind) {
     closeModal();
     await refresh();
   }
+  if (kind === 'titlecontact') {
+    const tcId = formEl.dataset.tc;
+    if (!tcId) { toast('Pick a title company first.', true); return; }
+    if (!id) {
+      const existing = titleContactsOf(tcId);
+      if (existing.length >= MAX_TITLE_CONTACTS) {
+        toast(`This company already has ${MAX_TITLE_CONTACTS} contacts.`, true);
+        return;
+      }
+      v.title_company_id = tcId;
+      v.position = existing.length
+        ? Math.max(...existing.map(c => c.position || 0)) + 1 : 0;
+    }
+    if (!(await saveRecord('title_contacts', id, v, 'Contact'))) return;
+    closeModal();
+    await refresh();
+  }
+  if (kind === 'general') {
+    const rec = await saveRecord('general_contacts', id, v, 'Contact');
+    if (!rec) return;
+    closeModal();
+    if (!id) state.sel = { type: 'g', id: rec.id };
+    await refresh();
+  }
 }
 
 async function handleModalDelete(btn) {
@@ -747,7 +872,10 @@ async function handleModalDelete(btn) {
   const formEl = $('#modal-root [data-form]');
   const kind = formEl.dataset.form;
   const id = formEl.dataset.id;
-  const table = { builder: 'builders', contact: 'contacts', titleco: 'title_companies' }[kind];
+  const table = {
+    builder: 'builders', contact: 'contacts', titleco: 'title_companies',
+    titlecontact: 'title_contacts', general: 'general_contacts',
+  }[kind];
   const { error } = await db.from(table).delete().eq('id', id);
   if (error) { toast(friendlyError(error), true); return; }
   toast('Deleted');
@@ -833,15 +961,18 @@ async function exportExcel() {
     const builders = [...state.builders].sort(byName);
     const tcName = (id) => { const x = tcById(id); return x ? x.name : ''; };
 
-    const CAP = { builders: 200, contacts: 500, tcs: 100, roles: 9 };
+    const CAP = { builders: 200, contacts: 500, tcs: 100, titleContacts: 600,
+      general: 500, roles: 30 };
     const clipped = [];
     if (builders.length > CAP.builders) clipped.push(`builders (first ${CAP.builders} of ${builders.length})`);
     if (state.contacts.length > CAP.contacts) clipped.push(`contacts (first ${CAP.contacts} of ${state.contacts.length})`);
     if (tcs.length > CAP.tcs) clipped.push(`title companies (first ${CAP.tcs} of ${tcs.length})`);
+    if (state.general.length > CAP.general) clipped.push(`contacts (first ${CAP.general} of ${state.general.length})`);
     if (state.roles.length > CAP.roles) clipped.push(`roles (first ${CAP.roles} of ${state.roles.length})`);
 
     const sheets = {
-      'Builders': {}, 'Contacts': {}, 'Title Companies': {}, 'Lists': {}, 'Dashboard': {},
+      'Builders': {}, 'Contacts': {}, 'Title Companies': {}, 'Title Contacts': {},
+      'General Contacts': {}, 'Lists': {}, 'Dashboard': {},
     };
     const bCols = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
     builders.slice(0, CAP.builders).forEach((b, i) => {
@@ -860,11 +991,25 @@ async function exportExcel() {
         cRow++;
       }
     }
-    const tCols = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K'];
+    const tCols = ['A', 'B', 'C', 'D', 'E'];
     tcs.slice(0, CAP.tcs).forEach((x, i) => {
-      const vals = [x.name, x.agent_name, x.agent_phone, x.agent_email, x.asst_name,
-        x.asst_phone, x.asst_email, x.team_email, x.office_phone, x.office_address, x.notes];
+      const vals = [x.name, x.team_email, x.office_phone, x.office_address, x.notes];
       vals.forEach((v, j) => { sheets['Title Companies'][tCols[j] + (i + 2)] = v; });
+    });
+    const tcCols = ['A', 'B', 'C', 'D', 'E', 'F'];
+    let tcRow = 2;
+    for (const x of tcs) {
+      for (const p of titleTeam(x)) {
+        if (tcRow > CAP.titleContacts + 1) break;
+        const vals = [x.name, p.role, p.name, p.phone, p.email, p.notes];
+        vals.forEach((v, j) => { sheets['Title Contacts'][tcCols[j] + tcRow] = v; });
+        tcRow++;
+      }
+    }
+    const gCols = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+    [...state.general].sort(byName).slice(0, CAP.general).forEach((g, i) => {
+      const vals = [g.name, g.company, g.phone, g.phone_2, g.email, g.email_2, g.notes];
+      vals.forEach((v, j) => { sheets['General Contacts'][gCols[j] + (i + 2)] = v; });
     });
     state.roles.slice(0, CAP.roles).forEach((r, i) => { sheets['Lists']['A' + (i + 2)] = r.name; });
     if (builders.length) sheets['Dashboard']['B4'] = builders[0].name;
@@ -885,7 +1030,7 @@ async function exportExcel() {
     const stamp = new Date().toISOString().slice(0, 10);
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `Builder_Database_${stamp}.xlsx`;
+    a.download = `TRL_Contacts_${stamp}.xlsx`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -993,21 +1138,18 @@ document.addEventListener('click', async (e) => {
   if (a === 'new-builder') openBuilderModal(null);
   if (a === 'new-titleco') openTitleCoModal(null);
   if (a === 'new-contact') openContactModal(null, { builderId: el.dataset.builder });
+  if (a === 'new-titlecontact') openTitleContactModal(null, { tcId: el.dataset.tc });
+  if (a === 'new-general') openGeneralModal(null);
   if (a === 'edit-builder') openBuilderModal(el.dataset.id);
   if (a === 'edit-contact') openContactModal(el.dataset.id);
   if (a === 'edit-titleco') openTitleCoModal(el.dataset.id);
-  if (a === 'gap') {
-    const b = state.sel && state.builders.find(x => x.id === state.sel.id);
-    if (!b) return;
-    const g = gapsFor(b)[Number(el.dataset.idx)];
-    if (!g) return;
-    if (g.go.kind === 'builder') openBuilderModal(g.go.id);
-    if (g.go.kind === 'contact') openContactModal(null, { builderId: g.go.builderId, role: g.go.role });
-    if (g.go.kind === 'titleco') openTitleCoModal(g.go.id);
-  }
+  if (a === 'edit-titlecontact') openTitleContactModal(el.dataset.id);
+  if (a === 'edit-general') openGeneralModal(el.dataset.id);
   if (a === 'save-builder') handleSave('builder');
   if (a === 'save-contact') handleSave('contact');
   if (a === 'save-titleco') handleSave('titleco');
+  if (a === 'save-titlecontact') handleSave('titlecontact');
+  if (a === 'save-general') handleSave('general');
   if (a === 'modal-delete') handleModalDelete(el);
   if (a === 'help') openHelpModal();
   if (a === 'team') openTeamModal();
