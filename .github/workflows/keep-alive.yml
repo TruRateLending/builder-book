@@ -18,14 +18,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Ping the database
-        # The publishable key is the same public one used by the app.
-        # Row level security returns an empty list to anonymous callers,
-        # but the query still counts as project activity for Supabase.
+        # The publishable key is the same public one the app ships in app.js:
+        # it identifies the project, it is not a secret, and row level security
+        # returns an empty list to anonymous callers. The query still counts as
+        # project activity for Supabase, which is the whole point.
+        # Sent as apikey only. An "Authorization: Bearer" header would be
+        # redundant here and makes secret scanners report a false positive.
         run: |
           code=$(curl -s -o /dev/null -w "%{http_code}" \
             "https://rqmuaeuqiqkhsnmashab.supabase.co/rest/v1/roles?select=name&limit=1" \
-            -H "apikey: sb_publishable_Vrs-KYaeRnKCXlhAvq_w1w_8JqcBtJq" \
-            -H "Authorization: Bearer sb_publishable_Vrs-KYaeRnKCXlhAvq_w1w_8JqcBtJq")
+            -H "apikey: sb_publishable_Vrs-KYaeRnKCXlhAvq_w1w_8JqcBtJq")
           echo "Supabase responded with HTTP $code"
           test "$code" = "200"
 
