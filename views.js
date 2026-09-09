@@ -220,8 +220,8 @@ function peopleTableHtml(affs, section, recId, opts) {
       <td class="nowrap hide-sm num">${valueWithCopy(fmtPhone(phone), telHref(phone), phone)}${more(p.phones)}</td>
       <td class="nowrap hide-sm">${valueWithCopy(email, 'mailto:' + email)}${more(p.emails)}</td>
       ${opts.noCC ? '' : `<td class="c ck hide-sm">${a.always_cc ? `<span title="Always CC" aria-label="Always CC">${icon('check')}</span>` : ''}</td>`}
-      <td class="act hide-sm">${canWrite() ? `<button class="mini" data-action="row-menu" data-id="${a.id}" aria-label="Actions for ${esc(p.name)}" aria-expanded="${state.menu === menuKey}">${icon('more', 14)}</button>
-        ${state.menu === menuKey ? rowMenuHtml(a, p) : ''}` : ''}</td>
+      <td class="act hide-sm">${canWrite() ? `<span class="rm"><button class="mini" data-action="row-menu" data-id="${a.id}" aria-label="Actions for ${esc(p.name)}" aria-expanded="${state.menu === menuKey}">${icon('more', 14)}</button>
+        ${state.menu === menuKey ? rowMenuHtml(a, p) : ''}</span>` : ''}</td>
     </tr>`;
   }).join('');
   return `<table class="grid">
@@ -407,7 +407,8 @@ function personCardHtml(p, cur, closeX) {
     const href = kind === 'phone' ? telHref(v) : 'mailto:' + v;
     return `<div class="crow always"><span class="lbl">${esc(t(x.label) || (kind === 'phone' ? 'Phone' : 'Email'))}</span><span class="val ${kind === 'phone' ? 'num' : ''}"><a href="${esc(href)}">${esc(shown)}</a></span>${copyBtn(v)}</div>`;
   }).join('');
-  return `<div class="insp-h"><span class="t">Person</span>${closeX}</div>
+  const editBtn = canWrite() ? `<button class="tbtn" data-action="edit-person" data-id="${p.id}" data-aff="${here ? here.id : ''}">Edit</button>` : '';
+  return `<div class="insp-h"><span class="t">Person</span>${editBtn}${closeX}</div>
   <div class="insp-b">
     <div class="who"><a href="#/people/${p.id}">${esc(p.name)}</a></div>
     <div class="role">${here ? `<span>${esc(here.role || 'Contact')} at ${esc(par ? par.name : '')}</span>` : `<span>${esc(t(p.company) || 'Not linked anywhere')}</span>`}${here && here.always_cc ? '<span class="badge">Always CC</span>' : ''}</div>
@@ -418,7 +419,7 @@ function personCardHtml(p, cur, closeX) {
     ${propHtml(p.id + ':notes', 'Notes', p.notes, { clamp: true })}
     ${t(p.company) && here ? propHtml(p.id + ':co', 'Company', p.company) : ''}
   </div>
-  <div class="insp-f">${canWrite() ? `<button class="btn" data-action="edit-person" data-id="${p.id}" data-aff="${here ? here.id : ''}">Edit</button>${here ? `<button class="btn danger" data-action="remove-aff" data-id="${here.id}">Remove from ${esc(par ? par.name : 'here')}</button>` : ''}` : ''}<span class="spacer"></span>${metaHtml(p)}</div>`;
+  <div class="insp-f">${canWrite() && here ? `<button class="btn danger" data-action="remove-aff" data-id="${here.id}">Remove from ${esc(par ? par.name : 'here')}</button>` : ''}<span class="spacer"></span>${metaHtml(p)}</div>`;
 }
 /* An organization selected inside a person record: what this person does there, plus the essentials. */
 function orgSummaryHtml(a, p, closeX) {
@@ -430,7 +431,8 @@ function orgSummaryHtml(a, p, closeX) {
   const meta = par.kind === 'b'
     ? [plural(affsOfBuilder(rec.id).length, 'person', 'people'), titleCo(rec.title_company_id) && titleCo(rec.title_company_id).name].filter(Boolean).join(' · ')
     : [plural(buildersOfTc(rec.id).length, 'builder'), plural(affsOfTc(rec.id).length, 'person', 'people')].join(' · ');
-  return `<div class="insp-h"><span class="t">${esc(par.name)}</span>${closeX || open}</div>
+  const editBtn = canWrite() ? `<button class="tbtn" data-action="edit-aff" data-id="${a.id}">Edit link</button>` : '';
+  return `<div class="insp-h"><span class="t">${esc(par.name)}</span>${editBtn}${closeX || open}</div>
   <div class="insp-b">
     <div class="meta" style="margin-bottom:14px;">${esc(meta)}</div>
     <div class="prop"><div class="k">${esc(first)} here</div><div class="v">${esc([a.role || 'Contact', t(a.handles), a.always_cc ? 'Always CC.' : ''].filter(Boolean).join('. ').replace(/\.\./g, '.'))}</div></div>
@@ -438,7 +440,7 @@ function orgSummaryHtml(a, p, closeX) {
       : (t(rec.team_email) ? `<div class="prop"><div class="k">Team email</div><div class="crow always"><span class="val"><a href="mailto:${esc(t(rec.team_email))}">${esc(t(rec.team_email))}</a></span>${copyBtn(t(rec.team_email))}</div></div>` : '') + propHtml(rec.id + ':op', 'Office phone', fmtPhone(rec.office_phone))}
     ${closeX ? '' : ''}
   </div>
-  <div class="insp-f">${canWrite() ? `<button class="btn" data-action="edit-aff" data-id="${a.id}">Edit link</button><button class="btn danger" data-action="remove-aff" data-id="${a.id}">Remove from ${esc(par.name)}</button>` : ''}<span class="spacer"></span>${closeX ? open : ''}</div>`;
+  <div class="insp-f">${canWrite() ? `<button class="btn danger" data-action="remove-aff" data-id="${a.id}">Remove from ${esc(par.name)}</button>` : ''}<span class="spacer"></span>${closeX ? open : ''}</div>`;
 }
 
 // ------------------------------------------------------------------ sign in and fatal screens
