@@ -1,51 +1,100 @@
-/* TRL Contacts - team database for builders, title companies, and contacts.
-   Plain JavaScript, no build step. To change the backend, edit the two
-   constants below. Data lives in Supabase; this page holds no data itself. */
+/* TRL Contacts. Plain JavaScript, no build step.
+   This file: constants, state, helpers, sign in, data loading, routing, search, events.
+   views.js renders the screen, forms.js edits records, export.js builds the Excel file.
+   All four share one global scope, so every function name lives in exactly one file. */
 
 'use strict';
 
-const MAX_TITLE_CONTACTS = 6;   // how many people one title company can hold
+// Bump on every deploy, and update the ?v= numbers in index.html to match.
+const APP_VERSION = '3';
 
 const SUPABASE_URL = 'https://rqmuaeuqiqkhsnmashab.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Vrs-KYaeRnKCXlhAvq_w1w_8JqcBtJq';
 
-const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const PHONE_LABELS = ['Mobile', 'Office', 'Direct', 'Fax', 'Other'];
+const EMAIL_LABELS = ['Work', 'Personal', 'Other'];
+// Suggestions for roles at a title company. Free text is allowed too.
+// Keep in step with TITLE_ROLES in build_v5.py.
+const TITLE_ROLE_SUGGESTIONS = ['Escrow Agent', 'Escrow Assistant', 'Closer', 'Title Officer', 'Processor', 'Post Closer'];
+
+// Demo mode: `?demo=1` on localhost renders made-up data without signing in.
+// Used to check layouts; it never touches the real database.
+const DEMO = /[?&]demo=1/.test(location.search) && /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
 
 // ------------------------------------------------------------------ state
 const state = {
   session: null,
-  allowed: null,          // null = unknown, true/false after check
-  myAccess: null,         // 'read' | 'write' | 'admin' once signed in and allowed
-  authView: 'signin',     // signin | signup | forgot | recovery | pending
-  authMsg: null,          // {text, err}
-  builders: [],
-  contacts: [],           // people attached to a builder
-  titleCompanies: [],
-  titleContacts: [],      // people attached to a title company
-  general: [],            // standalone contacts, not tied to a builder
-  roles: [],
-  team: [],               // [{email, access}]
-  sel: null,              // {type:'b'|'t'|'g', id}
-  q: '',
+  allowed: null,            // null = unknown, true/false after the team check
+  myAccess: null,           // 'read' | 'write' | 'admin'
+  authView: 'signin',
+  authMsg: null,
+  people: [], affiliations: [], builders: [], titleCompanies: [], roles: [], team: [],
+  ix: null,                 // indexes built by reindex()
+  route: { section: 'builders', id: null, sub: null, subId: null },
+  q: '',                    // list search text
+  searchCursor: -1,
+  filters: { role: '', where: '' },
+  form: null,               // {kind, id, preset, linkPersonId, force, busy} while editing
+  panel: null,              // 'team' | 'roles' | 'help' | null
+  inspOpen: false,          // mid/phone layouts: is the inspector drawer showing
+  showEmpty: {},            // record id -> true after "Show N empty fields"
+  expanded: {},             // "id:field" -> true after "Show more"
+  menu: null,               // 'account' | 'row:<id>' | 'more' | null
+  recent: [],
+  scroll: {},
 };
 
 const canWrite = () => state.myAccess === 'write' || state.myAccess === 'admin';
 const isAdmin = () => state.myAccess === 'admin';
 
-function applyTeam(rows) {
-  state.team = rows;
-  const me = state.session ? ci(state.session.user.email) : '';
-  const mine = rows.find(r => ci(r.email) === me);
-  state.myAccess = mine ? mine.access : null;
-}
-
-const $ = (sel) => document.querySelector(sel);
+// ------------------------------------------------------------------ small helpers
+const $ = (sel, root) => (root || document).querySelector(sel);
+const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 const esc = (s) => String(s == null ? '' : s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-const t = (s) => (s || '').trim();
-const telHref = (p) => 'tel:' + (p || '').replace(/[^0-9+]/g, '');
-const ci = (s) => (s || '').toLowerCase();
+const t = (s) => (s == null ? '' : String(s)).trim();
+const ci = (s) => t(s).toLowerCase();
+const digitsOf = (s) => t(s).replace(/\D/g, '');
+const byName = (a, b) => ci(a.name).localeCompare(ci(b.name));
+const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || one + 's')}`;
+
+/* Phone numbers display as 915-555-0100, with an extension as " x123". Anything that
+   is not a plain US number is shown as typed. */
+function fmtPhone(raw) {
+  const s = t(raw);
+  if (!s) return '';
+  const m = s.match(/^(.*?)(?:\s*(?:ext\.?|x|extension)\s*(\d+))?$/i);
+  const ext = m && m[2] ? m[2] : '';
+  let d = digitsOf(m ? m[1] : s);
+  if (d.length === 11 && d[0] === '1') d = d.slice(1);
+  if (d.length !== 10) return s;
+  return `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}${ext ? ' x' + ext : ''}`;
+}
+function telHref(raw) {
+  const s = t(raw);
+  const m = s.match(/^(.*?)(?:\s*(?:ext\.?|x|extension)\s*(\d+))?$/i);
+  const ext = m && m[2] ? m[2] : '';
+  let d = digitsOf(m ? m[1] : s);
+  if (d.length === 10) d = '1' + d;
+  const intl = d.length === 11 && d[0] === '1';       // only a full North American number gets the +1 prefix
+  return 'tel:' + (intl ? '+' : '') + d + (ext ? ';ext=' + ext : '');
+}
+function fmtAgo(iso) {
+  if (!iso) return '';
+  const ms = Date.now() - new Date(iso).getTime();
+  const min = Math.round(ms / 60000);
+  if (min < 2) return 'just now';
+  if (min < 60) return `${min} minutes ago`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `${plural(h, 'hour')} ago`;
+  const d = Math.round(h / 24);
+  if (d === 1) return 'yesterday';
+  if (d < 14) return `${d} days ago`;
+  if (d < 60) return `${Math.round(d / 7)} weeks ago`;
+  return new Date(iso).toLocaleDateString();
+}
+const who = (email) => (email ? String(email).split('@')[0] : '');
 
 let toastTimer = null;
 function toast(text, isErr) {
@@ -54,41 +103,128 @@ function toast(text, isErr) {
   el.className = isErr ? 'err' : '';
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, isErr ? 5000 : 2600);
+  toastTimer = setTimeout(() => { el.hidden = true; }, isErr ? 6000 : 3000);
 }
-
+function announce(text) {
+  const el = $('#live');
+  if (!el) return;
+  el.textContent = '';
+  setTimeout(() => { el.textContent = text; }, 30);
+}
 function friendlyError(error) {
   const m = (error && error.message) || 'Something went wrong.';
+  if (/affiliations_person_(builder|title)_key/.test(m)) return 'Already linked there.';
   if (/duplicate key|unique/i.test(m)) return 'That name is already in use.';
+  if (/row-level security/i.test(m)) return 'Your access does not allow that change.';
+  if (/Failed to fetch|NetworkError/i.test(m)) return 'Could not reach the database. Check your connection.';
   return m;
 }
+async function copyText(value, btn) {
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch (e) {
+    toast('Could not copy. Select the text and press Cmd+C.', true);
+    return;
+  }
+  announce('Copied ' + value);
+  if (btn) {
+    btn.classList.add('done');
+    btn.innerHTML = icon('check') + '<span class="tip">Copied</span>';
+    setTimeout(() => {
+      btn.classList.remove('done');
+      btn.innerHTML = icon('copy');
+    }, 1500);
+  }
+}
 
-// ------------------------------------------------------------------ auth
+// One small stroke icon set, 16px grid.
+const ICONS = {
+  search: '<circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5 14 14"></path>',
+  plus: '<path d="M8 3v10M3 8h10"></path>',
+  x: '<path d="M4 4l8 8M12 4l-8 8"></path>',
+  back: '<path d="M10 3 5 8l5 5"></path>',
+  down: '<path d="M4 6l4 4 4-4"></path>',
+  check: '<path d="M3 8.5l3.2 3L13 4.5"></path>',
+  copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1"></rect><path d="M10.5 5.5V3.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"></path>',
+  external: '<path d="M6 3H3v10h10v-3M9 3h4v4M13 3 7 9"></path>',
+  mail: '<rect x="2" y="3.5" width="12" height="9" rx="1.2"></rect><path d="m2.5 4.5 5.5 4 5.5-4"></path>',
+  phone: '<path d="M3 2.5h2.4l1.6 4-2 1.2a6.5 6.5 0 0 0 3.3 3.3l1.2-2 4 1.6v2.4a1 1 0 0 1-1 1A10.5 10.5 0 0 1 2 3.5a1 1 0 0 1 1-1z"></path>',
+  more: '<circle cx="3.5" cy="8" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="8" cy="8" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="12.5" cy="8" r="1.3" fill="currentColor" stroke="none"></circle>',
+  up: '<path d="M8 13V3M4 7l4-4 4 4"></path>',
+  pencil: '<path d="M11.5 2.5 13.5 4.5 5.5 12.5 2.5 13.5 3.5 10.5z"></path><path d="M10 4l2 2"></path>',
+  info: '<circle cx="8" cy="8" r="6.25"></circle><path d="M8 7.5v3.5M8 5.2v.1"></path>',
+  builders: '<path d="M2.5 13.5V6.5l5.5-4 5.5 4v7"></path><path d="M6.5 13.5v-4h3v4"></path><path d="M2.5 13.5h11"></path>',
+  people: '<circle cx="8" cy="5.5" r="2.8"></circle><path d="M2.8 13.5c0-2.6 2.3-4.4 5.2-4.4s5.2 1.8 5.2 4.4"></path>',
+  title: '<path d="M3 6.5h10M3 6.5l5-3.3 5 3.3M4 6.5v5.5M7 6.5v5.5M9 6.5v5.5M12 6.5v5.5M2.5 12h11v1.5h-11z"></path>',
+};
+function icon(name, size) {
+  const s = size || 16;
+  return `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+}
+
+// ------------------------------------------------------------------ database access
+/* Everything the app asks of the database goes through `api`, so demo mode can swap in
+   an in-memory copy without touching the rest of the code. */
+const supa = DEMO ? null : window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const supabaseApi = {
+  async select(table, order) {
+    let q = supa.from(table).select(table === 'allowed_users' ? 'email, access' : '*');
+    if (order) q = q.order(order);
+    return q;
+  },
+  insert: (table, values) => supa.from(table).insert(values).select().single(),
+  update: (table, id, values) => supa.from(table).update(values).eq('id', id).select().single(),
+  delete: (table, id) => supa.from(table).delete().eq('id', id),
+};
+
+const demoStore = {};
+const demoApi = {
+  async select(table) { return { data: (demoStore[table] || []).map(r => ({ ...r })), error: null }; },
+  async insert(table, values) {
+    const row = { id: 'demo-' + Math.random().toString(36).slice(2, 9), created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(), updated_by: 'you', ...values };
+    (demoStore[table] = demoStore[table] || []).push(row);
+    return { data: { ...row }, error: null };
+  },
+  async update(table, id, values) {
+    const row = (demoStore[table] || []).find(r => r.id === id);
+    if (!row) return { data: null, error: { message: 'Not found' } };
+    Object.assign(row, values, { updated_at: new Date().toISOString(), updated_by: 'you' });
+    return { data: { ...row }, error: null };
+  },
+  async delete(table, id) {
+    demoStore[table] = (demoStore[table] || []).filter(r => r.id !== id);
+    return { error: null };
+  },
+};
+const api = DEMO ? demoApi : supabaseApi;
+
+// ------------------------------------------------------------------ sign in
 async function boot() {
-  const { data } = await db.auth.getSession();
+  window.addEventListener('hashchange', onHashChange);
+  if (DEMO) {
+    seedDemo();
+    state.session = { user: { email: 'you@example.com' } };
+    state.allowed = true;
+    state.myAccess = 'admin';
+    await loadAll();
+    enterApp();
+    return;
+  }
+  const { data } = await supa.auth.getSession();
   state.session = data.session;
-  db.auth.onAuthStateChange((event, session) => {
+  supa.auth.onAuthStateChange((event, session) => {
     state.session = session;
-    if (event === 'PASSWORD_RECOVERY') {
-      state.authView = 'recovery';
-      state.allowed = null;
-      renderAuth();
-      return;
-    }
-    if (event === 'SIGNED_OUT') {
-      state.allowed = null;
-      state.authView = 'signin';
-      state.authMsg = null;
-      renderAuth();
-      return;
-    }
+    if (event === 'PASSWORD_RECOVERY') { state.authView = 'recovery'; state.allowed = null; renderAuth(); return; }
+    if (event === 'SIGNED_OUT') { state.allowed = null; state.authView = 'signin'; state.authMsg = null; renderAuth(); return; }
     if (event === 'SIGNED_IN' && state.allowed === null) enter();
   });
   if (state.session) enter(); else renderAuth();
 }
 
 async function enter() {
-  const { data, error } = await db.from('allowed_users').select('email, access').order('email');
+  const { data, error } = await api.select('allowed_users', 'email');
   if (error) {
     state.authView = 'signin';
     state.authMsg = { text: 'Could not reach the database: ' + friendlyError(error), err: true };
@@ -98,63 +234,28 @@ async function enter() {
   applyTeam(data);
   state.allowed = data.length > 0;
   if (!state.allowed) { renderAuth(); return; }
-  await loadAll();
-  if (!state.allowed) return;
-  if (!state.sel && state.builders.length) state.sel = { type: 'b', id: state.builders[0].id };
+  const ok = await loadAll();
+  if (!ok) return;
+  enterApp();
+}
+
+function enterApp() {
   $('#auth-screen').hidden = true;
   $('#app').hidden = false;
+  state.recent = loadRecent();
+  state.route = parseHash();
+  const explicit = Boolean(state.route.id);      // a deep link counts as a visit; the auto-selected first record does not
+  ensureRecord(true);
+  if (explicit) remember();
+  state.inspOpen = Boolean(state.route.sub);   // a deep link to a person opens the panel on smaller screens too
   render();
 }
 
-function renderAuth() {
-  $('#app').hidden = true;
-  $('#auth-screen').hidden = false;
-  const body = $('#auth-body');
-  const msg = state.authMsg
-    ? `<div class="auth-msg${state.authMsg.err ? ' err' : ''}">${esc(state.authMsg.text)}</div>` : '';
-
-  if (state.session && state.allowed === false) {
-    body.innerHTML = `
-      <div class="auth-msg err">You're signed in as <strong>${esc(state.session.user.email)}</strong>,
-      but that email isn't on the team list yet. Ask a teammate to add it under Team, then try again.</div>
-      <button class="btn-primary" data-auth="retry">Try again</button>
-      <div class="auth-alt"><button data-auth="signout">Sign out</button></div>`;
-    return;
-  }
-  if (state.authView === 'recovery') {
-    body.innerHTML = `
-      <div class="auth-msg">Set a new password for ${esc(state.session ? state.session.user.email : 'your account')}.</div>
-      <label class="auth-field"><span>New password</span><input id="auth-pass" type="password" autocomplete="new-password"></label>
-      ${msg}
-      <button class="btn-primary" data-auth="setpass">Save new password</button>`;
-    return;
-  }
-  if (state.authView === 'pending') {
-    body.innerHTML = `
-      <div class="auth-msg">Check your email for a confirmation link, then come back and sign in.</div>
-      ${msg}
-      <div class="auth-alt"><button data-auth="view-signin">Back to sign in</button></div>`;
-    return;
-  }
-  if (state.authView === 'forgot') {
-    body.innerHTML = `
-      <label class="auth-field"><span>Email</span><input id="auth-email" type="email" autocomplete="email"></label>
-      ${msg}
-      <button class="btn-primary" data-auth="forgot">Send reset link</button>
-      <div class="auth-alt"><button data-auth="view-signin">Back to sign in</button></div>`;
-    return;
-  }
-  const signup = state.authView === 'signup';
-  body.innerHTML = `
-    <label class="auth-field"><span>Email</span><input id="auth-email" type="email" autocomplete="email"></label>
-    <label class="auth-field"><span>Password</span><input id="auth-pass" type="password" autocomplete="${signup ? 'new-password' : 'current-password'}"></label>
-    ${msg}
-    <button class="btn-primary" data-auth="${signup ? 'signup' : 'signin'}">${signup ? 'Create account' : 'Sign in'}</button>
-    <div class="auth-alt">
-      ${signup
-        ? 'Already have an account? <button data-auth="view-signin">Sign in</button>'
-        : 'New here? <button data-auth="view-signup">Create an account</button> &middot; <button data-auth="view-forgot">Forgot password?</button>'}
-    </div>`;
+function applyTeam(rows) {
+  state.team = rows;
+  const me = state.session ? ci(state.session.user.email) : '';
+  const mine = rows.find(r => ci(r.email) === me);
+  state.myAccess = mine ? mine.access : null;
 }
 
 async function handleAuth(action) {
@@ -164,31 +265,27 @@ async function handleAuth(action) {
   if (action === 'view-signin') { state.authView = 'signin'; return renderAuth(); }
   if (action === 'view-signup') { state.authView = 'signup'; return renderAuth(); }
   if (action === 'view-forgot') { state.authView = 'forgot'; return renderAuth(); }
-  if (action === 'signout') { await db.auth.signOut(); return; }
+  if (action === 'signout') { await supa.auth.signOut(); return; }
   if (action === 'retry') { state.allowed = null; return enter(); }
-
   if (action === 'signin') {
-    const { error } = await db.auth.signInWithPassword({ email, password: pass });
+    const { error } = await supa.auth.signInWithPassword({ email, password: pass });
     if (error) { state.authMsg = { text: friendlyError(error), err: true }; return renderAuth(); }
-    return; // onAuthStateChange -> enter()
+    return;
   }
   if (action === 'signup') {
-    const { data, error } = await db.auth.signUp({ email, password: pass });
+    const { data, error } = await supa.auth.signUp({ email, password: pass });
     if (error) { state.authMsg = { text: friendlyError(error), err: true }; return renderAuth(); }
-    if (data.session) return; // confirmations off -> signed in
+    if (data.session) return;
     state.authView = 'pending';
     return renderAuth();
   }
   if (action === 'forgot') {
-    const { error } = await db.auth.resetPasswordForEmail(email, {
-      redirectTo: location.origin + location.pathname,
-    });
-    if (error) { state.authMsg = { text: friendlyError(error), err: true }; }
-    else state.authMsg = { text: 'If that email has an account, a reset link is on its way.' };
+    const { error } = await supa.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+    state.authMsg = error ? { text: friendlyError(error), err: true } : { text: 'If that email has an account, a reset link is on its way.' };
     return renderAuth();
   }
   if (action === 'setpass') {
-    const { error } = await db.auth.updateUser({ password: pass });
+    const { error } = await supa.auth.updateUser({ password: pass });
     if (error) { state.authMsg = { text: friendlyError(error), err: true }; return renderAuth(); }
     state.authView = 'signin';
     state.allowed = null;
@@ -198,930 +295,341 @@ async function handleAuth(action) {
 
 // ------------------------------------------------------------------ data
 async function loadAll() {
-  const [b, c, tc, tcp, gen, r, team] = await Promise.all([
-    db.from('builders').select('*').order('name'),
-    db.from('contacts').select('*'),
-    db.from('title_companies').select('*').order('name'),
-    db.from('title_contacts').select('*'),
-    db.from('general_contacts').select('*').order('name'),
-    db.from('roles').select('*').order('position'),
-    db.from('allowed_users').select('email, access').order('email'),
+  const [p, a, b, tc, r, team] = await Promise.all([
+    api.select('people', 'name'),
+    api.select('affiliations'),
+    api.select('builders', 'name'),
+    api.select('title_companies', 'name'),
+    api.select('roles', 'position'),
+    api.select('allowed_users', 'email'),
   ]);
-  for (const res of [b, c, tc, tcp, gen, r, team]) {
-    if (res.error) { toast('Load failed: ' + friendlyError(res.error), true); return; }
+  const failed = [p, a, b, tc, r, team].find(res => res.error);
+  if (failed) {
+    $('#auth-screen').hidden = true;
+    $('#app').hidden = false;
+    renderFatal('Could not load the database: ' + friendlyError(failed.error));
+    return false;
   }
-  if (team.data.length === 0) {   // access was revoked while signed in
+  if (!DEMO && team.data.length === 0) {     // access was revoked while signed in
     state.allowed = false;
     state.myAccess = null;
     renderAuth();
-    return;
+    return false;
   }
-  applyTeam(team.data);
+  if (!DEMO) applyTeam(team.data); else state.team = team.data;
+  state.people = p.data;
+  state.affiliations = a.data;
   state.builders = b.data;
-  state.contacts = c.data;
   state.titleCompanies = tc.data;
-  state.titleContacts = tcp.data;
-  state.general = gen.data;
   state.roles = r.data;
+  state.lastLoad = Date.now();
+  reindex();
+  return true;
 }
 
-async function refresh() {
-  await loadAll();
-  if (!state.allowed) return;
-  const lists = { b: state.builders, t: state.titleCompanies, g: state.general };
-  const list = state.sel ? lists[state.sel.type] : null;
-  if (state.sel && !list.some(x => x.id === state.sel.id)) {
-    state.sel = state.builders.length ? { type: 'b', id: state.builders[0].id } : null;
+/* Builds the lookups every render uses. Call after any change to the arrays above. */
+function reindex() {
+  const ix = {
+    person: new Map(state.people.map(x => [x.id, x])),
+    builder: new Map(state.builders.map(x => [x.id, x])),
+    tc: new Map(state.titleCompanies.map(x => [x.id, x])),
+    affsByPerson: new Map(), affsByBuilder: new Map(), affsByTc: new Map(),
+    buildersByTc: new Map(),
+    roleRank: new Map(),
+  };
+  state.roles.forEach((r, i) => ix.roleRank.set(ci(r.name), i));
+  TITLE_ROLE_SUGGESTIONS.forEach((r, i) => { if (!ix.roleRank.has(ci(r))) ix.roleRank.set(ci(r), 100 + i); });
+  const push = (map, key, val) => { if (!map.has(key)) map.set(key, []); map.get(key).push(val); };
+  for (const a of state.affiliations) {
+    push(ix.affsByPerson, a.person_id, a);
+    if (a.builder_id) push(ix.affsByBuilder, a.builder_id, a);
+    if (a.title_company_id) push(ix.affsByTc, a.title_company_id, a);
   }
+  for (const b of state.builders) if (b.title_company_id) push(ix.buildersByTc, b.title_company_id, b);
+  const personName = (a) => { const p = ix.person.get(a.person_id); return p ? ci(p.name) : ''; };
+  const sortAffs = (list) => list.sort((a, b) => rankRole(a.role, ix) - rankRole(b.role, ix) || personName(a).localeCompare(personName(b)));
+  for (const m of [ix.affsByPerson, ix.affsByBuilder, ix.affsByTc]) for (const list of m.values()) sortAffs(list);
+  for (const list of ix.buildersByTc.values()) list.sort(byName);
+  ix.unlinked = state.people.filter(p => !ix.affsByPerson.has(p.id)).sort(byName);
+  state.ix = ix;
+  buildDocs();
+}
+function rankRole(role, ix) {
+  const r = (ix || state.ix).roleRank.get(ci(role));
+  return r === undefined ? 999 : r;
+}
+const person = (id) => (state.ix && state.ix.person.get(id)) || null;
+const builder = (id) => (state.ix && state.ix.builder.get(id)) || null;
+const titleCo = (id) => (state.ix && state.ix.tc.get(id)) || null;
+const affsOfPerson = (id) => (state.ix && state.ix.affsByPerson.get(id)) || [];
+const affsOfBuilder = (id) => (state.ix && state.ix.affsByBuilder.get(id)) || [];
+const affsOfTc = (id) => (state.ix && state.ix.affsByTc.get(id)) || [];
+const buildersOfTc = (id) => (state.ix && state.ix.buildersByTc.get(id)) || [];
+const affById = (id) => state.affiliations.find(a => a.id === id) || null;
+function parentOf(a) {
+  if (!a) return null;
+  if (a.builder_id) { const b = builder(a.builder_id); return b ? { kind: 'b', rec: b, name: b.name } : null; }
+  const c = titleCo(a.title_company_id);
+  return c ? { kind: 't', rec: c, name: c.name } : null;
+}
+const parentName = (a) => { const p = parentOf(a); return p ? p.name : ''; };
+const list = (arr) => (Array.isArray(arr) ? arr : []);
+const primary = (arr) => { const v = list(arr).find(x => t(x && x.value)); return v ? t(v.value) : ''; };
+const rest = (arr) => list(arr).slice(1).filter(x => t(x && x.value)).map(x => (t(x.label) ? t(x.label) + ' ' : '') + t(x.value)).join('; ');
+const TABLE_OF = { people: 'people', affiliations: 'affiliations', builders: 'builders', title_companies: 'titleCompanies', roles: 'roles' };
+
+function putLocal(table, row) {
+  const arr = state[TABLE_OF[table]];
+  const i = arr.findIndex(x => x.id === row.id);
+  if (i >= 0) arr[i] = row; else arr.push(row);
+  if (table !== 'affiliations' && table !== 'roles') arr.sort(byName);
+  if (table === 'roles') arr.sort((a, b) => a.position - b.position);
+  reindex();
+}
+function dropLocal(table, id) {
+  state[TABLE_OF[table]] = state[TABLE_OF[table]].filter(x => x.id !== id);
+  if (table === 'people') state.affiliations = state.affiliations.filter(a => a.person_id !== id);
+  if (table === 'builders') state.affiliations = state.affiliations.filter(a => a.builder_id !== id);
+  if (table === 'title_companies') {
+    state.affiliations = state.affiliations.filter(a => a.title_company_id !== id);
+    for (const b of state.builders) if (b.title_company_id === id) b.title_company_id = null;
+  }
+  reindex();
+}
+async function saveRow(table, id, values) {
+  const { data, error } = id ? await api.update(table, id, values) : await api.insert(table, values);
+  if (error) { toast(friendlyError(error), true); return null; }
+  putLocal(table, data);
+  return data;
+}
+async function deleteRow(table, id) {
+  const { error } = await api.delete(table, id);
+  if (error) { toast(friendlyError(error), true); return false; }
+  dropLocal(table, id);
+  return true;
+}
+/* Pulls fresh data when the window regains focus, at most every 30 seconds, and never
+   while someone is in the middle of a form. */
+async function refresh() {
+  if (state.form || Date.now() - state.lastLoad < 30000) return;
+  if (await loadAll()) { ensureRecord(false); render(); }
+}
+
+// ------------------------------------------------------------------ routing
+/* Routes: #/builders, #/builders/:id, #/builders/:id/person/:pid,
+           #/people, #/people/:id, #/people/:id/at/:affId,
+           #/title, #/title/:id, #/title/:id/person/:pid  */
+function parseHash() {
+  const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+  const section = ['builders', 'people', 'title'].includes(parts[0]) ? parts[0] : 'builders';
+  return { section, id: parts[1] || null, sub: parts[2] || null, subId: parts[3] || null };
+}
+function routeHash(r) {
+  let h = '#/' + r.section;
+  if (r.id) h += '/' + r.id;
+  if (r.id && r.sub && r.subId) h += '/' + r.sub + '/' + r.subId;
+  return h;
+}
+function navigate(hash, replace) {
+  if (replace) history.replaceState(null, '', hash); else location.hash = hash;
+  if (replace) onHashChange();
+}
+function onHashChange() {
+  const prev = state.route;
+  state.route = parseHash();
+  if (state.form && !isDirty()) state.form = null;
+  if (prev.section !== state.route.section) { state.q = ''; state.searchCursor = -1; state.filters = { role: '', where: '' }; }
+  state.menu = null;
+  if (state.route.sub) state.panel = null;              // picking a person replaces an open help/team panel
+  state.inspOpen = Boolean(state.route.sub || state.form || state.panel);
+  ensureRecord(false);
+  remember();
+  render();
+  if (prev.id !== state.route.id) {
+    const main = $('#record');
+    if (main) { main.scrollTop = 0; main.focus({ preventScroll: true }); }
+  }
+}
+/* On wide layouts an empty section shows its first record; on phones it shows the list. */
+function ensureRecord(replace) {
+  const r = state.route;
+  const rows = sectionRows(r.section);
+  if (r.id && !rows.some(x => x.id === r.id)) { r.missing = r.id; r.id = null; r.sub = null; r.subId = null; }
+  if (!r.id && !r.missing && rows.length && layoutMode() !== 'phone') {
+    r.id = rows[0].id;
+    history.replaceState(null, '', routeHash(r));
+  }
+  if (r.sub === 'person' && r.subId && !person(r.subId)) { r.sub = null; r.subId = null; }
+  if (r.sub === 'at' && r.subId && !affById(r.subId)) { r.sub = null; r.subId = null; }
+}
+function sectionRows(section) {
+  if (section === 'people') return state.people;
+  if (section === 'title') return state.titleCompanies;
+  return state.builders;
+}
+function currentRecord() {
+  const r = state.route;
+  if (!r.id) return null;
+  if (r.section === 'people') { const p = person(r.id); return p ? { kind: 'person', rec: p } : null; }
+  if (r.section === 'title') { const c = titleCo(r.id); return c ? { kind: 'tc', rec: c } : null; }
+  const b = builder(r.id);
+  return b ? { kind: 'builder', rec: b } : null;
+}
+function loadRecent() {
+  try { return JSON.parse(localStorage.getItem('trl-recent') || '[]'); } catch (e) { return []; }
+}
+function remember() {
+  const r = state.route;
+  if (!r.id) return;
+  const key = r.section + ':' + r.id;
+  state.recent = [key, ...state.recent.filter(k => k !== key)].slice(0, 8);
+  try { localStorage.setItem('trl-recent', JSON.stringify(state.recent)); } catch (e) { /* private mode */ }
+}
+
+// ------------------------------------------------------------------ search
+function buildDocs() {
+  const docs = [];
+  for (const p of state.people) {
+    const affs = affsOfPerson(p.id);
+    const fields = [['Company', p.company], ['Notes', p.notes]];
+    for (const a of affs) fields.push([parentName(a), [a.role, a.handles].filter(t).join(': ')]);
+    for (const x of list(p.phones)) fields.push([t(x.label) || 'Phone', fmtPhone(x.value)]);
+    for (const x of list(p.emails)) fields.push([t(x.label) || 'Email', t(x.value)]);
+    docs.push({
+      type: 'person', id: p.id, name: p.name, fields,
+      sub: affs.map(a => `${a.role || 'Contact'} · ${parentName(a)}`).join(', ') || (t(p.company) || 'Not linked anywhere'),
+      text: ci([p.name, ...fields.map(f => f[1])].join(' ')),
+      digits: list(p.phones).map(x => digitsOf(x.value)).join(' '),
+    });
+  }
+  for (const b of state.builders) {
+    const tc = titleCo(b.title_company_id);
+    const fields = [['Title company', tc ? tc.name : ''], ['Concession', b.concession], ['Allowed uses', b.allowed_uses],
+      ['Special process', b.special_process], ['CC rules', b.comm_rules], ['Notes', b.notes], ['Dropbox', b.dropbox]];
+    docs.push({ type: 'builder', id: b.id, name: b.name, fields,
+      sub: [plural(affsOfBuilder(b.id).length, 'person', 'people'), tc && tc.name].filter(Boolean).join(' · '),
+      text: ci([b.name, ...fields.map(f => f[1])].join(' ')), digits: '' });
+  }
+  for (const c of state.titleCompanies) {
+    const fields = [['Team email', c.team_email], ['Office phone', fmtPhone(c.office_phone)], ['Office address', c.office_address], ['Notes', c.notes]];
+    docs.push({ type: 'tc', id: c.id, name: c.name, fields,
+      sub: `${plural(buildersOfTc(c.id).length, 'builder')} · ${plural(affsOfTc(c.id).length, 'person', 'people')}`,
+      text: ci([c.name, ...fields.map(f => f[1])].join(' ')), digits: digitsOf(c.office_phone) });
+  }
+  state.ix.docs = docs;
+}
+const tokenize = (q) => ci(q).split(/\s+/).filter(Boolean);
+function searchAll(q) {
+  const tokens = tokenize(q);
+  const out = { people: [], builders: [], tcs: [] };
+  if (!tokens.length) return out;
+  for (const d of state.ix.docs) {
+    const ok = tokens.every(tok => {
+      if (d.text.includes(tok)) return true;
+      const dg = digitsOf(tok);
+      return dg.length >= 3 && d.digits.includes(dg);
+    });
+    if (!ok) continue;
+    const nameHit = tokens.some(tok => ci(d.name).includes(tok));
+    const match = nameHit ? null : d.fields.find(f => tokens.some(tok => ci(f[1]).includes(tok) || (digitsOf(tok).length >= 3 && digitsOf(f[1]).includes(digitsOf(tok)))));
+    const item = { ...d, nameHit, match };
+    (d.type === 'person' ? out.people : d.type === 'builder' ? out.builders : out.tcs).push(item);
+  }
+  const rank = (a, b) => (b.nameHit - a.nameHit) || ci(a.name).localeCompare(ci(b.name));
+  out.people.sort(rank); out.builders.sort(rank); out.tcs.sort(rank);
+  return out;
+}
+/* Wraps matched fragments in <mark>, escaping the text first, never regexing over HTML. */
+function hl(text, tokens) {
+  const s = String(text == null ? '' : text);
+  const low = s.toLowerCase();
+  const ranges = [];
+  for (const tok of tokens) {
+    if (!tok) continue;
+    let i = low.indexOf(tok);
+    while (i >= 0) { ranges.push([i, i + tok.length]); i = low.indexOf(tok, i + tok.length); }
+  }
+  if (!ranges.length) return esc(s);
+  ranges.sort((a, b) => a[0] - b[0]);
+  let out = '', pos = 0;
+  for (const [a, b] of ranges) {
+    if (a < pos) continue;
+    out += esc(s.slice(pos, a)) + '<mark>' + esc(s.slice(a, b)) + '</mark>';
+    pos = b;
+  }
+  return out + esc(s.slice(pos));
+}
+
+// ------------------------------------------------------------------ layout
+function layoutMode() {
+  if (window.matchMedia('(max-width: 959px)').matches) return 'phone';
+  if (window.matchMedia('(max-width: 1439px)').matches) return 'mid';
+  return 'wide';
+}
+function applyLayout() {
+  const mode = layoutMode();
+  const app = $('#app');
+  app.classList.toggle('has-record', Boolean(state.route.id));
+  const open = mode === 'wide' || state.inspOpen;
+  $('#insp').classList.toggle('open', open && mode !== 'wide');
+  $('#insp').hidden = !open;
+  $('#scrim').hidden = !(open && mode !== 'wide');
+}
+function openInsp() { state.inspOpen = true; }
+function closeInsp() {
+  if (state.form) { if (!closeForm()) return; }
+  state.panel = null;
+  state.inspOpen = false;
+  if (state.route.sub) { navigate(routeHash({ ...state.route, sub: null, subId: null })); return; }
   render();
 }
 
-const tcById = (id) => state.titleCompanies.find(x => x.id === id) || null;
-const genById = (id) => state.general.find(x => x.id === id) || null;
-
-/* A title company's people, in the order they were added. */
-const titleContactsOf = (tcId) => state.titleContacts
-  .filter(c => c.title_company_id === tcId)
-  .sort((a, b) => (a.position || 0) - (b.position || 0) || a.name.localeCompare(b.name));
-
-const titleTeam = (tc) => (tc ? titleContactsOf(tc.id) : []);
-const contactsOf = (id) => {
-  const rank = (role) => {
-    const i = state.roles.findIndex(r => r.name === role);
-    return i < 0 ? 99 : i;
-  };
-  return state.contacts.filter(c => c.builder_id === id)
-    .sort((a, b) => rank(a.role) - rank(b.role) || a.name.localeCompare(b.name));
-};
-
-// ------------------------------------------------------------------ render
-function render() {
-  $('[data-action="team"]').hidden = !isAdmin();
-  $('#access-note').hidden = state.myAccess !== 'read';
-  renderSidebar();
-  renderMain();
-}
-
-function renderSidebar() {
-  const q = ci(t(state.q));
-  const cMatch = (c) => ci(`${c.name} ${c.role} ${c.email} ${c.phone}`).includes(q);
-
-  const builders = state.builders.filter(b => {
-    if (!q) return true;
-    if (ci(b.name).includes(q)) return true;
-    const tc = tcById(b.title_company_id);
-    if (tc && ci(tc.name).includes(q)) return true;
-    return state.contacts.some(c => c.builder_id === b.id && cMatch(c));
+// ------------------------------------------------------------------ demo data (layout checks only)
+function seedDemo() {
+  const now = new Date().toISOString();
+  const id = (p, i) => `${p}${i}`;
+  const tcs = ['Stewart Title - Mary Cherry', 'Weststar Title - Diane Rodriguez', 'El Paso Title'].map((name, i) => ({
+    id: id('t', i), name, team_email: i === 0 ? 'stcelpcullersteam@stewart.com' : '', office_phone: i === 0 ? '9155550200' : '',
+    office_address: i === 0 ? '6006 N Mesa St, Suite 201\nEl Paso, TX 79912' : '', notes: i === 0 ? "Always include Mary's assistant and the team email on correspondence." : '',
+    created_at: now, updated_at: now, updated_by: 'jenn@closewithjenn.com' }));
+  const bn = ['Bella Vista Homes', 'Cullers Homes', 'Desert View Homes', 'Edwards Homes', 'Edwards Homes - NM', 'El Paso Homes', 'Hakes Brothers', 'Icon Custom Homes', 'Pointe Homes', 'RS Homes', 'Savannah Homes', 'Saratoga Homes'];
+  const builders = bn.map((name, i) => ({ id: id('b', i), name, title_company_id: i === 1 ? 't0' : i === 3 ? 't1' : i === 5 ? 't2' : null,
+    dropbox: i % 2 ? 'https://www.dropbox.com/scl/fo/' + name.toLowerCase().replace(/\W+/g, '-') : '',
+    concession: i === 1 ? 'Up to 3%' : i === 6 ? 'Up to $10,000' : '', calc_from: i === 1 ? 'Loan amount' : i === 6 ? 'Sales price' : '',
+    allowed_uses: i === 1 ? 'Closing costs, prepaids and rate buydown. Not toward down payment. Must be on the contract before submission; any change after underwriting needs an addendum signed by both parties and a revised CD. Builder pays title policy when their preferred title company is used, otherwise the buyer covers it. Ask the builder rep before quoting anything over 3% on FHA files.' : '',
+    special_process: '', comm_rules: i === 1 ? 'Always CC Yolanda and the team inbox on anything involving builder docs or the appraisal.\nSeller-signed items go to Gina first.' : '',
+    notes: '', created_at: now, updated_at: now, updated_by: 'jenn@closewithjenn.com' }));
+  const ppl = [
+    ['Dennis Estep', 'b1', 'Owner', 'Final say on concessions', false, ['9155550101'], ['dennis@cullershomes.com']],
+    ['Yolanda Perez', 'b1', 'Builder Rep', 'POC for builder docs and appraisals', true, ['9155550102', '9155550199'], ['yolanda@cullershomes.com']],
+    ['Gina Zamora', 'b1', 'Builder Docs POC', 'Seller-signed items, addenda', true, ['9155550103'], ['gina@cullershomes.com']],
+    ['Marco Ruiz', 'b1', 'Appraisal POC', 'Schedules appraisal access', false, ['9155550104'], ['marco@cullershomes.com']],
+    ['Karen Mills', 'b1', 'Listing Agent', '', false, ['9155550105'], ['karen@realtyone.com']],
+    ['Adolfo Alvarez', 'b1', 'Realtor', 'Also works RS Homes', false, ['9155550106'], ['adolfo@realtyone.com']],
+    ['Tina Brooks', 'b1', 'Sales', '', false, [], ['tina@cullershomes.com']],
+    ['Celeste Fernandez', 'b1', 'Transaction Coordinator', 'Sends the contract package', false, ['915-555-0108 ext 12'], ['celeste@cullershomes.com']],
+    ['Roxana Breceda', 'b1', 'Other', '', false, [], ['roxana@cullershomes.com']],
+    ['Brianna Cole', 'b6', 'Builder Rep', 'Docs and appraisals', false, ['5755550301'], ['brianna@hakesbrothers.com']],
+    ['Sam Ortiz', 'b6', 'Sales', '', false, ['5755550302'], ['sam@hakesbrothers.com']],
+    ['Luis Ochoa', 'b2', 'Builder Rep', 'Docs, appraisals, anything on the file', false, ['9155550401'], ['luis@desertviewhomes.com']],
+    ['Mary Cherry', 't0', 'Escrow Agent', '', false, ['9155550201'], ['mary.cherry@stewart.com']],
+    ['Cheryl Hughes', 't0', 'Escrow Assistant', 'Covers when Mary is out', false, ['9155550202'], ['cheryl.hughes@stewart.com']],
+    ['Gina General', null, '', '', false, ['9155554444', '9155555555'], ['gina@ins.com']],
+  ];
+  const people = [], affs = [];
+  ppl.forEach((row, i) => {
+    const [name, parent, role, handles, cc, phones, emails] = row;
+    people.push({ id: id('p', i), name, company: parent ? '' : 'Insurance Co', notes: i === 1 ? 'Out Fridays. Prefers text for anything urgent.' : '',
+      phones: phones.map((v, j) => ({ label: j === 0 ? 'Mobile' : 'Office', value: v })), emails: emails.map(v => ({ label: 'Work', value: v })),
+      created_at: now, updated_at: now, updated_by: 'jenn@closewithjenn.com' });
+    if (parent) affs.push({ id: id('a', i), person_id: id('p', i), builder_id: parent[0] === 'b' ? parent : null,
+      title_company_id: parent[0] === 't' ? parent : null, role, handles, always_cc: cc, created_at: now, updated_at: now, updated_by: 'jenn@closewithjenn.com' });
   });
-  const tcs = state.titleCompanies.filter(x => !q || ci(x.name).includes(q)
-    || titleTeam(x).some(p => ci(`${p.name} ${p.role} ${p.email} ${p.phone}`).includes(q)));
-  const gens = state.general.filter(x => !q
-    || ci(`${x.name} ${x.company} ${x.email} ${x.email_2} ${x.phone} ${x.phone_2}`).includes(q));
-
-  const newBtn = (action) => canWrite() ? `<button data-action="${action}">+ New</button>` : '';
-  let html = `
-    <div class="side-heading"><span>Builders</span>${newBtn('new-builder')}</div>`;
-  for (const b of builders) {
-    const active = state.sel && state.sel.type === 'b' && state.sel.id === b.id;
-    const tc = tcById(b.title_company_id);
-    const m = q && !ci(b.name).includes(q)
-      ? state.contacts.find(c => c.builder_id === b.id && cMatch(c)) : null;
-    const sub = m ? `↳ ${m.name} · ${m.role}` : (tc ? tc.name : '');
-    html += `
-      <div class="side-item${active ? ' active' : ''}" data-action="select" data-type="b" data-id="${b.id}">
-        <div class="side-item-top">
-          <span class="side-item-name">${esc(b.name)}</span>
-        </div>
-        ${sub ? `<div class="side-item-sub">${esc(sub)}</div>` : ''}
-      </div>`;
-  }
-  html += `
-    <div class="side-heading" style="margin-top:20px"><span>Title companies</span>${newBtn('new-titleco')}</div>`;
-  for (const x of tcs) {
-    const active = state.sel && state.sel.type === 't' && state.sel.id === x.id;
-    const team = titleTeam(x);
-    const agent = team.find(p => ci(p.role).includes('agent'));
-    const sub = agent ? agent.name : (team.length ? team[0].name : '');
-    html += `
-      <div class="side-item${active ? ' active' : ''}" data-action="select" data-type="t" data-id="${x.id}">
-        <div class="side-item-top">
-          <span class="side-item-name tc">${esc(x.name)}</span>
-        </div>
-        ${sub ? `<div class="side-item-sub">${esc(sub)}</div>` : ''}
-      </div>`;
-  }
-  html += `
-    <div class="side-heading" style="margin-top:20px"><span>Contacts</span>${newBtn('new-general')}</div>`;
-  for (const x of gens) {
-    const active = state.sel && state.sel.type === 'g' && state.sel.id === x.id;
-    const sub = t(x.company) || t(x.phone) || t(x.email);
-    html += `
-      <div class="side-item${active ? ' active' : ''}" data-action="select" data-type="g" data-id="${x.id}">
-        <div class="side-item-top">
-          <span class="side-item-name tc">${esc(x.name)}</span>
-        </div>
-        ${sub ? `<div class="side-item-sub">${esc(sub)}</div>` : ''}
-      </div>`;
-  }
-  if (!state.general.length) {
-    html += '<div class="no-match">Nobody here yet. Use + New for people who are not tied to one builder.</div>';
-  }
-  if (q && !builders.length && !tcs.length && !gens.length) html += '<div class="no-match">No matches.</div>';
-  $('#sidebar-lists').innerHTML = html;
-}
-
-function titleContactBlockHtml(p) {
-  return `
-    <div class="esc-block">
-      <div class="esc-top">
-        <div class="card-label">${esc(t(p.role) || 'Contact')}</div>
-        ${canWrite() ? `<button class="edit-link" data-action="edit-titlecontact" data-id="${p.id}">Edit</button>` : ''}
-      </div>
-      ${t(p.name) ? `<div class="who">${esc(p.name)}</div>` : ''}
-      <div class="lines">
-        ${t(p.phone) ? `<a href="${telHref(p.phone)}">${esc(p.phone)}</a>` : ''}
-        ${t(p.email) ? `<a href="mailto:${esc(p.email)}">${esc(p.email)}</a>` : ''}
-      </div>
-      ${t(p.notes) ? `<div class="esc-note-line">${esc(p.notes)}</div>` : ''}
-    </div>`;
-}
-
-function escrowSectionHtml(tc) {
-  const team = titleTeam(tc);
-  const room = MAX_TITLE_CONTACTS - team.length;
-  const canAdd = canWrite();
-  const cells = [
-    ['Team / group email', tc.team_email, tc.team_email ? `mailto:${tc.team_email}` : null],
-    ['Office phone', tc.office_phone, tc.office_phone ? telHref(tc.office_phone) : null],
-    ['Office address', tc.office_address, null],
-  ];
-  return `
-    <div class="section-head" style="margin:22px 0 0">
-      <div style="display:flex;align-items:baseline">
-        <div class="card-label">Escrow &amp; title team</div>
-        <span class="count">${team.length} of ${MAX_TITLE_CONTACTS}</span>
-      </div>
-      ${canAdd && room > 0
-        ? `<button class="btn-ghost" data-action="new-titlecontact" data-tc="${tc.id}">+ Add contact</button>`
-        : (canAdd ? `<span class="slots-left">All ${MAX_TITLE_CONTACTS} slots used</span>` : '')}
-    </div>
-    ${team.length
-      ? `<div class="esc-grid">${team.map(titleContactBlockHtml).join('')}</div>`
-      : '<div class="empty-box" style="margin-top:12px">No people here yet.</div>'}
-    <div class="info-grid">
-      ${cells.map(([label, val, href]) => `
-        <div class="info-cell">
-          <div class="card-label">${esc(label)}</div>
-          ${t(val)
-            ? (href ? `<a href="${esc(href)}">${esc(val)}</a>` : `<div class="val">${esc(val)}</div>`)
-            : '<div class="val">—</div>'}
-        </div>`).join('')}
-    </div>
-    ${t(tc.notes) ? `<div class="esc-note"><strong>Note</strong> · ${esc(tc.notes)}</div>` : ''}`;
-}
-
-function renderMain() {
-  const main = $('#main');
-  const sel = state.sel;
-  if (!sel) {
-    main.innerHTML = `
-      <div class="center-empty"><div style="text-align:center">
-        <div style="font-size:15px;font-weight:600;color:var(--text-mid)">Nothing selected</div>
-        <div style="font-size:13.5px;color:oklch(0.55 0.02 235);margin-top:6px">Pick a builder on the left${canWrite() ? ', or create one' : ''}.</div>
-        ${canWrite() ? '<button class="btn-solid" style="margin-top:16px" data-action="new-builder">+ New builder</button>' : ''}
-      </div></div>`;
-    return;
-  }
-  if (sel.type === 't') { renderTitleCo(main, tcById(sel.id)); return; }
-  if (sel.type === 'g') { renderGeneral(main, genById(sel.id)); return; }
-  renderBuilder(main, state.builders.find(b => b.id === sel.id));
-}
-
-function renderBuilder(main, b) {
-  if (!b) { state.sel = null; renderMain(); return; }
-  const tc = tcById(b.title_company_id);
-  const people = contactsOf(b.id);
-  const dbx = t(b.dropbox);
-  const dbxIsUrl = /^https?:\/\//i.test(dbx);
-
-  const peopleCards = people.map(p => {
-    const asst = [p.asst_name, p.asst_phone, p.asst_email].map(t).filter(Boolean).join(' · ');
-    return `
-      <div class="card person-card">
-        <div class="person-top">
-          <span class="role-pill">${esc(p.role || 'Contact')}</span>
-          ${canWrite() ? `<button class="edit-link" data-action="edit-contact" data-id="${p.id}">Edit</button>` : ''}
-        </div>
-        <div class="person-name">${esc(p.name)}</div>
-        <div class="person-contact">
-          ${t(p.phone) ? `<a href="${telHref(p.phone)}">${esc(p.phone)}</a>` : ''}
-          ${t(p.email) ? `<a href="mailto:${esc(p.email)}">${esc(p.email)}</a>` : ''}
-        </div>
-        ${t(p.handles) ? `<div class="person-handles">${esc(p.handles)}</div>` : ''}
-        ${asst ? `<div class="person-asst">Assistant · ${esc(asst)}</div>` : ''}
-        ${t(p.notes) ? `<div class="person-asst">Note · ${esc(p.notes)}</div>` : ''}
-      </div>`;
-  }).join('');
-
-  main.innerHTML = `
-  <div class="page">
-    <div class="page-head">
-      <div style="min-width:0">
-        <div class="kicker">Builder profile</div>
-        <h1>${esc(b.name)}</h1>
-      </div>
-      <div class="page-head-actions">
-        ${dbx ? (dbxIsUrl
-          ? `<a class="btn-ghost mono" href="${esc(dbx)}" target="_blank" rel="noopener">Dropbox folder ↗</a>`
-          : `<span class="dropbox-path" title="Dropbox location">${esc(dbx)}</span>`) : ''}
-        ${canWrite() ? `<button class="btn-ghost" data-action="edit-builder" data-id="${b.id}">Edit builder</button>` : ''}
-      </div>
-    </div>
-
-    ${t(b.comm_rules) ? `
-      <div class="cc-banner"><div class="tag">CC rules</div>
-        <div class="body">${esc(b.comm_rules)}</div></div>` : ''}
-
-    <div class="section-head" style="margin-top:26px">
-      <div style="display:flex;align-items:baseline">
-        <h2>People</h2>
-        <span class="count">${people.length} ${people.length === 1 ? 'person' : 'people'}</span>
-      </div>
-      ${canWrite() ? `<button class="btn-solid" data-action="new-contact" data-builder="${b.id}">+ Add person</button>` : ''}
-    </div>
-    ${people.length
-      ? `<div class="people-grid">${peopleCards}</div>`
-      : `<div class="empty-box">No people here yet.${canWrite()
-          ? ` <button class="linkish" style="font-size:13.5px;font-weight:700" data-action="new-contact" data-builder="${b.id}">Add the first person</button>`
-          : ''}</div>`}
-
-    <div class="card-grid">
-      <div class="card">
-        <div class="card-label">Concessions</div>
-        <div class="card-big">${esc(t(b.concession) || '—')}</div>
-        ${t(b.calc_from) ? `<div class="card-note">calculated from ${esc(b.calc_from)}</div>` : ''}
-        <div class="card-divider"></div>
-        <div class="card-label">Allowed uses &amp; details</div>
-        <div class="card-text">${esc(t(b.allowed_uses) || '—')}</div>
-      </div>
-      <div class="card">
-        <div class="card-label">Special process &amp; incentives</div>
-        <div class="card-text">${esc(t(b.special_process) || '—')}</div>
-        <div class="card-divider"></div>
-        <div class="card-label">General notes</div>
-        <div class="card-text">${esc(t(b.notes) || '—')}</div>
-      </div>
-    </div>
-
-    <div class="section-head">
-      <h2>Title &amp; escrow</h2>
-      ${tc && canWrite() ? `<button class="btn-ghost" data-action="edit-titleco" data-id="${tc.id}">Edit company</button>` : ''}
-    </div>
-    ${tc ? `
-      <div class="card">
-        <div class="card-label">Title company</div>
-        <div style="font-size:17px;font-weight:800;margin-top:6px;letter-spacing:-0.01em">${esc(tc.name)}</div>
-        ${escrowSectionHtml(tc)}
-      </div>` : `
-      <div class="empty-box">No title company linked yet.${canWrite()
-        ? ` <button class="linkish" style="font-size:13.5px;font-weight:700" data-action="edit-builder" data-id="${b.id}">Link one</button>`
-        : ''}
-      </div>`}
-  </div>`;
-}
-
-function renderTitleCo(main, tc) {
-  if (!tc) { state.sel = null; renderMain(); return; }
-  const used = state.builders.filter(b => b.title_company_id === tc.id);
-  main.innerHTML = `
-  <div class="page">
-    <div class="page-head">
-      <div style="min-width:0">
-        <div class="kicker">Title company</div>
-        <h1>${esc(tc.name)}</h1>
-      </div>
-      <div class="page-head-actions">
-        ${canWrite() ? `<button class="btn-ghost" data-action="edit-titleco" data-id="${tc.id}">Edit company</button>` : ''}
-      </div>
-    </div>
-    <div class="usedby-row">
-      <span class="kicker" style="font-size:10.5px">Used by</span>
-      ${used.length
-        ? used.map(b => `<button class="usedby-chip" data-action="select" data-type="b" data-id="${b.id}">${esc(b.name)}</button>`).join('')
-        : '<span style="font-size:13px;color:oklch(0.55 0.02 235)">no builders linked yet</span>'}
-    </div>
-    <div class="card" style="margin-top:22px">${escrowSectionHtml(tc)}</div>
-  </div>`;
-}
-
-function renderGeneral(main, g) {
-  if (!g) { state.sel = null; renderMain(); return; }
-  const phones = [g.phone, g.phone_2].map(t).filter(Boolean);
-  const emails = [g.email, g.email_2].map(t).filter(Boolean);
-  const line = (val, href) => `<a href="${esc(href)}">${esc(val)}</a>`;
-  main.innerHTML = `
-  <div class="page">
-    <div class="page-head">
-      <div style="min-width:0">
-        <div class="kicker">Contact</div>
-        <h1>${esc(g.name)}</h1>
-        ${t(g.company) ? `<div class="person-company" style="margin-top:8px">${esc(g.company)}</div>` : ''}
-      </div>
-      <div class="page-head-actions">
-        ${canWrite() ? `<button class="btn-ghost" data-action="edit-general" data-id="${g.id}">Edit contact</button>` : ''}
-      </div>
-    </div>
-    <div class="card-grid">
-      <div class="card">
-        <div class="card-label">Phone</div>
-        <div class="lines" style="margin-top:8px">
-          ${phones.length ? phones.map(p => line(p, telHref(p))).join('') : '<div class="val">—</div>'}
-        </div>
-        <div class="card-divider"></div>
-        <div class="card-label">Email</div>
-        <div class="lines" style="margin-top:8px">
-          ${emails.length ? emails.map(e => line(e, 'mailto:' + e)).join('') : '<div class="val">—</div>'}
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-label">Notes</div>
-        <div class="card-text">${esc(t(g.notes) || '—')}</div>
-      </div>
-    </div>
-  </div>`;
-}
-
-// ------------------------------------------------------------------ modals
-function closeModal() { $('#modal-root').innerHTML = ''; }
-
-function modalShell(title, inner, opts = {}) {
-  $('#modal-root').innerHTML = `
-    <div class="modal-overlay" data-action="close-modal">
-      <div class="modal${opts.narrow ? ' narrow' : ''}" data-stop="1">
-        <div class="modal-head">
-          <h2>${esc(title)}</h2>
-          <button class="modal-close" data-action="close-modal">✕</button>
-        </div>
-        ${inner}
-      </div>
-    </div>`;
-}
-
-function field(label, name, value, opts = {}) {
-  const attrs = `data-f="${name}" ${opts.ph ? `placeholder="${esc(opts.ph)}"` : ''}`
-    + (opts.list ? ` list="${esc(opts.list)}"` : '');
-  if (opts.textarea) {
-    return `<label class="form-field"><span class="form-label">${esc(label)}</span>
-      <textarea ${attrs} rows="${opts.rows || 3}">${esc(value || '')}</textarea></label>`;
-  }
-  return `<label class="form-field"><span class="form-label">${esc(label)}</span>
-    <input ${attrs} value="${esc(value || '')}"></label>`;
-}
-
-function actionsHtml(deleteLabel, saveAction) {
-  return `
-    <div class="modal-actions">
-      ${deleteLabel ? `<button class="btn-danger-link" data-action="modal-delete">${esc(deleteLabel)}</button>` : ''}
-      <div class="spacer"></div>
-      <button class="btn-ghost" data-action="close-modal">Cancel</button>
-      <button class="btn-solid" data-action="${saveAction}">Save</button>
-    </div>`;
-}
-
-function openBuilderModal(id) {
-  const b = id ? state.builders.find(x => x.id === id) : null;
-  const opts = state.titleCompanies.map(x =>
-    `<option value="${x.id}" ${b && b.title_company_id === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('');
-  modalShell(b ? 'Edit builder' : 'New builder', `
-    <div data-form="builder" data-id="${id || ''}">
-      ${field('Builder name', 'name', b && b.name, { ph: 'e.g. Cullers Homes' })}
-      <label class="form-field"><span class="form-label">Title company</span>
-        <select data-f="title_company_id">
-          <option value="">— No title company yet —</option>${opts}
-        </select></label>
-      ${field('Dropbox link or folder path', 'dropbox', b && b.dropbox, { ph: 'https://... or DB > TRL Team > Builder > ...' })}
-      <div class="form-grid-2">
-        ${field('Concession amount / %', 'concession', b && b.concession, { ph: 'e.g. Up to 3%' })}
-        ${field('Calculated from', 'calc_from', b && b.calc_from, { ph: 'e.g. Loan Amount' })}
-      </div>
-      ${field('Allowed uses & concession details', 'allowed_uses', b && b.allowed_uses, { textarea: true })}
-      ${field('Special process & incentives', 'special_process', b && b.special_process, { textarea: true })}
-      ${field('Communication rules (who to CC, etc.)', 'comm_rules', b && b.comm_rules, { textarea: true, rows: 2 })}
-      ${field('General notes', 'notes', b && b.notes, { textarea: true, rows: 2 })}
-      ${actionsHtml(b ? 'Delete builder' : null, 'save-builder')}
-    </div>`);
-}
-
-function openContactModal(id, preset = {}) {
-  const c = id ? state.contacts.find(x => x.id === id) : null;
-  const builderId = c ? c.builder_id : preset.builderId || (state.builders[0] && state.builders[0].id) || '';
-  const role = c ? c.role : preset.role || '';
-  const bOpts = state.builders.map(b =>
-    `<option value="${b.id}" ${b.id === builderId ? 'selected' : ''}>${esc(b.name)}</option>`).join('');
-  const rOpts = state.roles.map(r =>
-    `<option value="${esc(r.name)}" ${r.name === role ? 'selected' : ''}>${esc(r.name)}</option>`).join('');
-  modalShell(c ? 'Edit person' : 'Add person', `
-    <div data-form="contact" data-id="${id || ''}">
-      <div class="form-grid-2">
-        <label class="form-field"><span class="form-label">Builder</span>
-          <select data-f="builder_id">${bOpts}</select></label>
-        <label class="form-field"><span class="form-label">Role</span>
-          <select data-f="role"><option value="">Choose role...</option>${rOpts}</select>
-          ${isAdmin() ? '<span class="roles-note"><button class="linkish" style="font-size:12px" data-action="roles">Edit the role list</button></span>' : ''}
-        </label>
-      </div>
-      ${field('Name', 'name', c && c.name, { ph: 'Full name' })}
-      <div class="form-grid-2">
-        ${field('Phone', 'phone', c && c.phone, { ph: '915-...' })}
-        ${field('Email', 'email', c && c.email, { ph: 'name@...' })}
-      </div>
-      ${field('What they handle / when to contact', 'handles', c && c.handles,
-        { textarea: true, ph: 'e.g. POC for builder docs AND appraisals - always CC Yolanda' })}
-      <div class="form-grid-3">
-        ${field('Assistant name', 'asst_name', c && c.asst_name)}
-        ${field('Asst. phone', 'asst_phone', c && c.asst_phone)}
-        ${field('Asst. email', 'asst_email', c && c.asst_email)}
-      </div>
-      ${field('Notes', 'notes', c && c.notes, { textarea: true, rows: 2 })}
-      ${actionsHtml(c ? 'Remove person' : null, 'save-contact')}
-    </div>`);
-}
-
-function openTitleCoModal(id) {
-  const x = id ? state.titleCompanies.find(v => v.id === id) : null;
-  modalShell(x ? 'Edit title company' : 'New title company', `
-    <div data-form="titleco" data-id="${id || ''}">
-      ${field('Company name', 'name', x && x.name, { ph: 'e.g. Stewart Title - Mary Cherry' })}
-      <div class="form-grid-2">
-        ${field('Team / group email', 'team_email', x && x.team_email)}
-        ${field('Office phone', 'office_phone', x && x.office_phone)}
-      </div>
-      ${field('Office address', 'office_address', x && x.office_address)}
-      ${field('Notes', 'notes', x && x.notes, { textarea: true, rows: 2 })}
-      <div class="roles-note">${x
-        ? `People are added on the company page, up to ${MAX_TITLE_CONTACTS} of them.`
-        : `Save the company first, then add its people on its page, up to ${MAX_TITLE_CONTACTS} of them.`}</div>
-      ${actionsHtml(x ? 'Delete company' : null, 'save-titleco')}
-    </div>`);
-}
-
-/* Common title roles. Typed values are allowed too - the list is only a shortcut,
-   so a new kind of contact never needs a code change. */
-const TITLE_ROLE_SUGGESTIONS = ['Escrow Agent', 'Escrow Assistant', 'Closer',
-  'Title Officer', 'Processor', 'Post Closer'];
-
-function openTitleContactModal(id, preset = {}) {
-  const p = id ? state.titleContacts.find(x => x.id === id) : null;
-  const tcId = p ? p.title_company_id : preset.tcId;
-  const tc = tcById(tcId);
-  if (!p && titleContactsOf(tcId).length >= MAX_TITLE_CONTACTS) {
-    toast(`${tc ? tc.name : 'This company'} already has ${MAX_TITLE_CONTACTS} contacts.`, true);
-    return;
-  }
-  modalShell(p ? 'Edit title contact' : 'Add title contact', `
-    <div data-form="titlecontact" data-id="${id || ''}" data-tc="${esc(tcId || '')}">
-      <div class="roles-note">${esc(tc ? tc.name : 'Title company')}</div>
-      <div class="form-grid-2">
-        ${field('Name', 'name', p && p.name, { ph: 'Full name' })}
-        ${field('Role', 'role', p ? p.role : preset.role, { ph: 'e.g. Escrow Agent', list: 'title-roles' })}
-      </div>
-      <datalist id="title-roles">
-        ${TITLE_ROLE_SUGGESTIONS.map(r => `<option value="${esc(r)}"></option>`).join('')}
-      </datalist>
-      <div class="form-grid-2">
-        ${field('Phone', 'phone', p && p.phone, { ph: '915-...' })}
-        ${field('Email', 'email', p && p.email, { ph: 'name@...' })}
-      </div>
-      ${field('Notes', 'notes', p && p.notes, { textarea: true, rows: 2 })}
-      ${actionsHtml(p ? 'Remove contact' : null, 'save-titlecontact')}
-    </div>`);
-}
-
-function openGeneralModal(id) {
-  const g = id ? genById(id) : null;
-  modalShell(g ? 'Edit contact' : 'New contact', `
-    <div data-form="general" data-id="${id || ''}">
-      <div class="form-grid-2">
-        ${field('Name', 'name', g && g.name, { ph: 'Full name' })}
-        ${field('Company or role', 'company', g && g.company, { ph: 'optional' })}
-      </div>
-      <div class="form-grid-2">
-        ${field('Phone', 'phone', g && g.phone, { ph: '915-...' })}
-        ${field('Second phone', 'phone_2', g && g.phone_2, { ph: 'optional' })}
-      </div>
-      <div class="form-grid-2">
-        ${field('Email', 'email', g && g.email, { ph: 'name@...' })}
-        ${field('Second email', 'email_2', g && g.email_2, { ph: 'optional' })}
-      </div>
-      ${field('Notes', 'notes', g && g.notes, { textarea: true, rows: 4 })}
-      ${actionsHtml(g ? 'Remove contact' : null, 'save-general')}
-    </div>`);
-}
-
-function openHelpModal() {
-  const steps = [
-    ['Pick a builder', 'Everything on the page belongs to the builder selected on the left. Search finds builders, people, title companies, and contacts.'],
-    ['People come first', 'A builder\'s people are listed at the top of their page. "+ Add person" adds another one right there. Changes save to the cloud instantly, so the whole team always sees the latest version.'],
-    ['Title companies are shared', `Link a builder to a title company and its escrow team appears on the builder's page. Each company holds up to ${MAX_TITLE_CONTACTS} people. Update the company once and every builder linked to it stays current.`],
-    ['Contacts', 'The Contacts list at the bottom of the sidebar is for people who are not tied to one builder. Two phone numbers, two emails, and a notes field each.'],
-    ['Working a file?', 'Read the CC rules and Concessions before structuring or emailing. The people cards say exactly who handles builder docs, appraisals, and seller-signed items.'],
-    ['Export to Excel', 'The Export button downloads the whole database as the team’s standard Excel workbook, dashboard included, in case you ever want a spreadsheet copy or an offline backup.'],
-  ];
-  modalShell('How this works', `
-    <div class="help-body">
-      ${steps.map(([title, d], i) => `
-        <div class="help-step">
-          <span class="help-num">0${i + 1}</span>
-          <div><div class="t">${esc(title)}</div><div class="d">${esc(d)}</div></div>
-        </div>`).join('')}
-    </div>`);
-}
-
-function openTeamModal() {
-  const me = state.session ? ci(state.session.user.email) : '';
-  const levels = ['read', 'write', 'admin'];
-  const accessSelect = (email, current) => `
-    <select class="access-select" data-team-access data-email="${esc(email)}">
-      ${levels.map(a => `<option value="${a}" ${a === current ? 'selected' : ''}>${a}</option>`).join('')}
-    </select>`;
-  modalShell('Team access', `
-    <div data-form="team">
-      <div class="team-hint">Everyone on this list can sign in and see the database.
-        <strong>Read</strong> is view only. <strong>Write</strong> can edit builders, people,
-        and title companies. <strong>Admin</strong> can also manage this list and the role list.
-        To add a teammate: add their email, pick a level, then have them create an account with
-        that exact email.</div>
-      <div class="team-list">
-        ${state.team.map(r => `
-          <div class="team-row">
-            <span class="email">${esc(r.email)}${ci(r.email) === me ? ' <span style="color:var(--text-muted)">(you)</span>' : ''}</span>
-            <span class="team-controls">
-              ${accessSelect(r.email, r.access)}
-              <button class="edit-link" data-action="team-remove" data-email="${esc(r.email)}">Remove</button>
-            </span>
-          </div>`).join('')}
-      </div>
-      <div class="team-add">
-        <input type="email" data-f="new_email" placeholder="teammate@company.com">
-        <select class="access-select" data-f="new_access">
-          ${levels.map(a => `<option value="${a}">${a}</option>`).join('')}
-        </select>
-        <button class="btn-solid" data-action="team-add">Add</button>
-      </div>
-    </div>`, { narrow: true });
-}
-
-function openRolesModal() {
-  modalShell('Roles', `
-    <div data-form="roles">
-      <div class="roles-note">These feed the Role dropdown on people. Renaming or removing a role
-        does not change people already saved with it. The Excel export includes the first 30 roles.</div>
-      <div class="team-list">
-        ${state.roles.map((r, i) => `
-          <div class="team-row">
-            <span class="email">${esc(r.name)}</span>
-            <span>
-              <button class="edit-link" data-action="role-up" data-id="${r.id}" ${i === 0 ? 'disabled' : ''}>↑</button>
-              <button class="edit-link" data-action="role-down" data-id="${r.id}" ${i === state.roles.length - 1 ? 'disabled' : ''}>↓</button>
-              <button class="edit-link" data-action="role-remove" data-id="${r.id}">Remove</button>
-            </span>
-          </div>`).join('')}
-      </div>
-      <div class="team-add">
-        <input data-f="new_role" placeholder="New role name">
-        <button class="btn-solid" data-action="role-add">Add</button>
-      </div>
-    </div>`, { narrow: true });
-}
-
-// ------------------------------------------------------------------ saves
-function readForm(formEl) {
-  const out = {};
-  formEl.querySelectorAll('[data-f]').forEach(el => { out[el.dataset.f] = t(el.value); });
-  return out;
-}
-
-async function saveRecord(table, id, values, label) {
-  const query = id
-    ? db.from(table).update(values).eq('id', id).select().single()
-    : db.from(table).insert(values).select().single();
-  const { data, error } = await query;
-  if (error) { toast(friendlyError(error), true); return null; }
-  toast(label + ' saved');
-  return data;
-}
-
-async function handleSave(kind) {
-  const formEl = $('#modal-root [data-form]');
-  const id = formEl.dataset.id || null;
-  const v = readForm(formEl);
-  if (!v.name) { toast('Name is required.', true); return; }
-
-  if (kind === 'builder') {
-    v.title_company_id = v.title_company_id || null;
-    const rec = await saveRecord('builders', id, v, 'Builder');
-    if (!rec) return;
-    closeModal();
-    if (!id) state.sel = { type: 'b', id: rec.id };
-    await refresh();
-  }
-  if (kind === 'contact') {
-    if (!v.role) v.role = 'Other';
-    if (!v.builder_id) { toast('Pick a builder.', true); return; }
-    if (!(await saveRecord('contacts', id, v, 'Person'))) return;
-    closeModal();
-    await refresh();
-  }
-  if (kind === 'titleco') {
-    if (!(await saveRecord('title_companies', id, v, 'Title company'))) return;
-    closeModal();
-    await refresh();
-  }
-  if (kind === 'titlecontact') {
-    const tcId = formEl.dataset.tc;
-    if (!tcId) { toast('Pick a title company first.', true); return; }
-    if (!id) {
-      const existing = titleContactsOf(tcId);
-      if (existing.length >= MAX_TITLE_CONTACTS) {
-        toast(`This company already has ${MAX_TITLE_CONTACTS} contacts.`, true);
-        return;
-      }
-      v.title_company_id = tcId;
-      v.position = existing.length
-        ? Math.max(...existing.map(c => c.position || 0)) + 1 : 0;
-    }
-    if (!(await saveRecord('title_contacts', id, v, 'Contact'))) return;
-    closeModal();
-    await refresh();
-  }
-  if (kind === 'general') {
-    const rec = await saveRecord('general_contacts', id, v, 'Contact');
-    if (!rec) return;
-    closeModal();
-    if (!id) state.sel = { type: 'g', id: rec.id };
-    await refresh();
-  }
-}
-
-async function handleModalDelete(btn) {
-  if (!btn.dataset.armed) {
-    btn.dataset.armed = '1';
-    btn.textContent = 'Really delete? This cannot be undone. Click again to confirm.';
-    return;
-  }
-  const formEl = $('#modal-root [data-form]');
-  const kind = formEl.dataset.form;
-  const id = formEl.dataset.id;
-  const table = {
-    builder: 'builders', contact: 'contacts', titleco: 'title_companies',
-    titlecontact: 'title_contacts', general: 'general_contacts',
-  }[kind];
-  const { error } = await db.from(table).delete().eq('id', id);
-  if (error) { toast(friendlyError(error), true); return; }
-  toast('Deleted');
-  closeModal();
-  await refresh();
-}
-
-// ------------------------------------------------------------------ export
-/* Export works by injecting the live data into template_v5.xlsx, an empty copy
-   of the team's workbook, so a download is exactly that workbook plus data.
-   The template is generated by `python3 build_v5.py --template` in the parent
-   project; regenerate it there rather than editing the .xlsx by hand.
-   A brand-new field means four edits: the column in Supabase, a form field
-   below, a column here in exportExcel, and a matching column in build_v5.py. */
-async function getSheetPaths(zip) {
-  const parse = (s) => new DOMParser().parseFromString(s, 'application/xml');
-  const wbDoc = parse(await zip.file('xl/workbook.xml').async('string'));
-  const relDoc = parse(await zip.file('xl/_rels/workbook.xml.rels').async('string'));
-  const rels = {};
-  for (const r of relDoc.getElementsByTagName('Relationship')) {
-    rels[r.getAttribute('Id')] = r.getAttribute('Target');
-  }
-  const paths = {};
-  for (const s of wbDoc.getElementsByTagName('sheet')) {
-    const rid = s.getAttribute('r:id') || s.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id');
-    let target = rels[rid];
-    if (target.startsWith('/')) target = target.slice(1); else target = 'xl/' + target;
-    paths[s.getAttribute('name')] = target;
-  }
-  return paths;
-}
-
-const SS_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
-const colToNum = (col) => col.split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
-
-function setSheetCells(doc, cells) {
-  const sheetData = doc.getElementsByTagNameNS(SS_NS, 'sheetData')[0];
-  const rows = {};
-  for (const r of Array.from(sheetData.getElementsByTagNameNS(SS_NS, 'row'))) {
-    rows[r.getAttribute('r')] = r;
-  }
-  for (const [ref, value] of Object.entries(cells)) {
-    if (value === '' || value == null) continue;
-    const m = ref.match(/^([A-Z]+)([0-9]+)$/);
-    const colN = colToNum(m[1]);
-    let row = rows[m[2]];
-    if (!row) {
-      row = doc.createElementNS(SS_NS, 'row');
-      row.setAttribute('r', m[2]);
-      let after = null;
-      for (const r of Array.from(sheetData.getElementsByTagNameNS(SS_NS, 'row'))) {
-        if (Number(r.getAttribute('r')) > Number(m[2])) { after = r; break; }
-      }
-      sheetData.insertBefore(row, after);
-      rows[m[2]] = row;
-    }
-    let cell = null, before = null;
-    for (const c of Array.from(row.getElementsByTagNameNS(SS_NS, 'c'))) {
-      const cRef = c.getAttribute('r');
-      if (cRef === ref) { cell = c; break; }
-      if (!before && colToNum(cRef.match(/^[A-Z]+/)[0]) > colN) before = c;
-    }
-    if (!cell) {
-      cell = doc.createElementNS(SS_NS, 'c');
-      cell.setAttribute('r', ref);
-      row.insertBefore(cell, before);
-    }
-    while (cell.firstChild) cell.removeChild(cell.firstChild);
-    cell.setAttribute('t', 'inlineStr');
-    const is = doc.createElementNS(SS_NS, 'is');
-    const tEl = doc.createElementNS(SS_NS, 't');
-    tEl.setAttributeNS('http://www.w3.org/XML/1998/namespace', 'xml:space', 'preserve');
-    tEl.textContent = String(value);
-    is.appendChild(tEl);
-    cell.appendChild(is);
-  }
-}
-
-async function exportExcel() {
-  toast('Building the Excel workbook...');
-  try {
-    const resp = await fetch('template_v5.xlsx');
-    if (!resp.ok) throw new Error('Could not load the Excel template.');
-    const zip = await JSZip.loadAsync(await resp.arrayBuffer());
-    const paths = await getSheetPaths(zip);
-
-    const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-    const tcs = [...state.titleCompanies].sort(byName);
-    const builders = [...state.builders].sort(byName);
-    const tcName = (id) => { const x = tcById(id); return x ? x.name : ''; };
-
-    const CAP = { builders: 200, contacts: 500, tcs: 100, titleContacts: 600,
-      general: 500, roles: 30 };
-    const clipped = [];
-    if (builders.length > CAP.builders) clipped.push(`builders (first ${CAP.builders} of ${builders.length})`);
-    if (state.contacts.length > CAP.contacts) clipped.push(`contacts (first ${CAP.contacts} of ${state.contacts.length})`);
-    if (tcs.length > CAP.tcs) clipped.push(`title companies (first ${CAP.tcs} of ${tcs.length})`);
-    if (state.general.length > CAP.general) clipped.push(`contacts (first ${CAP.general} of ${state.general.length})`);
-    if (state.roles.length > CAP.roles) clipped.push(`roles (first ${CAP.roles} of ${state.roles.length})`);
-
-    const sheets = {
-      'Builders': {}, 'Contacts': {}, 'Title Companies': {}, 'Title Contacts': {},
-      'General Contacts': {}, 'Lists': {}, 'Dashboard': {},
-    };
-    const bCols = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
-    builders.slice(0, CAP.builders).forEach((b, i) => {
-      const vals = [b.name, tcName(b.title_company_id), b.dropbox, b.concession, b.calc_from,
-        b.allowed_uses, b.special_process, b.comm_rules, b.notes];
-      vals.forEach((v, j) => { sheets['Builders'][bCols[j] + (i + 2)] = v; });
-    });
-    const cCols = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
-    let cRow = 2;
-    for (const b of builders) {
-      for (const p of contactsOf(b.id)) {
-        if (cRow > CAP.contacts + 1) break;
-        const vals = [b.name, p.role, p.name, p.phone, p.email, p.handles,
-          p.asst_name, p.asst_phone, p.asst_email, p.notes];
-        vals.forEach((v, j) => { sheets['Contacts'][cCols[j] + cRow] = v; });
-        cRow++;
-      }
-    }
-    const tCols = ['A', 'B', 'C', 'D', 'E'];
-    tcs.slice(0, CAP.tcs).forEach((x, i) => {
-      const vals = [x.name, x.team_email, x.office_phone, x.office_address, x.notes];
-      vals.forEach((v, j) => { sheets['Title Companies'][tCols[j] + (i + 2)] = v; });
-    });
-    const tcCols = ['A', 'B', 'C', 'D', 'E', 'F'];
-    let tcRow = 2;
-    for (const x of tcs) {
-      for (const p of titleTeam(x)) {
-        if (tcRow > CAP.titleContacts + 1) break;
-        const vals = [x.name, p.role, p.name, p.phone, p.email, p.notes];
-        vals.forEach((v, j) => { sheets['Title Contacts'][tcCols[j] + tcRow] = v; });
-        tcRow++;
-      }
-    }
-    const gCols = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
-    [...state.general].sort(byName).slice(0, CAP.general).forEach((g, i) => {
-      const vals = [g.name, g.company, g.phone, g.phone_2, g.email, g.email_2, g.notes];
-      vals.forEach((v, j) => { sheets['General Contacts'][gCols[j] + (i + 2)] = v; });
-    });
-    state.roles.slice(0, CAP.roles).forEach((r, i) => { sheets['Lists']['A' + (i + 2)] = r.name; });
-    if (builders.length) sheets['Dashboard']['B4'] = builders[0].name;
-
-    for (const [name, cells] of Object.entries(sheets)) {
-      const path = paths[name];
-      const doc = new DOMParser().parseFromString(await zip.file(path).async('string'), 'application/xml');
-      setSheetCells(doc, cells);
-      let xml = new XMLSerializer().serializeToString(doc);
-      if (!xml.startsWith('<?xml')) xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + xml;
-      zip.file(path, xml);
-    }
-
-    const blob = await zip.generateAsync({
-      type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 },
-      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    });
-    const stamp = new Date().toISOString().slice(0, 10);
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `TRL_Contacts_${stamp}.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
-    toast(clipped.length ? 'Exported, but clipped: ' + clipped.join('; ') : 'Excel workbook downloaded');
-  } catch (err) {
-    toast('Export failed: ' + err.message, true);
-  }
-}
-
-// ------------------------------------------------------------------ team & roles actions
-async function teamAdd() {
-  const email = ci(t($('#modal-root [data-f="new_email"]').value));
-  const access = $('#modal-root [data-f="new_access"]').value;
-  if (!email || !email.includes('@')) { toast('Enter an email address.', true); return; }
-  const { error } = await db.from('allowed_users').insert({ email, access });
-  if (error) { toast(friendlyError(error), true); return; }
-  state.team.push({ email, access });
-  state.team.sort((a, b) => a.email.localeCompare(b.email));
-  openTeamModal();
-}
-
-async function teamRemove(email, btn) {
-  const me = state.session ? ci(state.session.user.email) : '';
-  if (!btn.dataset.armed) {
-    btn.dataset.armed = '1';
-    btn.textContent = ci(email) === me ? 'This locks YOU out. Click again.' : 'Click again to confirm';
-    return;
-  }
-  const { data, error } = await db.from('allowed_users').delete().eq('email', email).select();
-  if (error) { toast(friendlyError(error), true); openTeamModal(); return; }
-  if (!data.length) { toast('Not allowed.', true); openTeamModal(); return; }
-  state.team = state.team.filter(r => r.email !== email);
-  if (ci(email) === me) { state.allowed = false; state.myAccess = null; closeModal(); renderAuth(); return; }
-  openTeamModal();
-}
-
-async function teamSetAccess(sel) {
-  const email = sel.dataset.email;
-  const { data, error } = await db.from('allowed_users')
-    .update({ access: sel.value }).eq('email', email).select();
-  if (error || !data.length) {
-    toast(error ? friendlyError(error) : 'Not allowed.', true);
-    openTeamModal();
-    return;
-  }
-  const row = state.team.find(r => r.email === email);
-  if (row) row.access = sel.value;
-  toast('Access updated');
-  if (state.session && ci(email) === ci(state.session.user.email)) {
-    state.myAccess = sel.value;
-    if (!isAdmin()) closeModal();
-    render();
-  }
-}
-
-async function roleAdd() {
-  const input = $('#modal-root [data-f="new_role"]');
-  const name = t(input.value);
-  if (!name) return;
-  const { error } = await db.from('roles')
-    .insert({ name, position: state.roles.length });
-  if (error) { toast(friendlyError(error), true); return; }
-  await loadAll();
-  openRolesModal();
-}
-
-async function roleRemove(id, btn) {
-  if (!btn.dataset.armed) { btn.dataset.armed = '1'; btn.textContent = 'Sure?'; return; }
-  const { error } = await db.from('roles').delete().eq('id', id);
-  if (error) { toast(friendlyError(error), true); return; }
-  await loadAll();
-  openRolesModal();
-}
-
-async function roleMove(id, dir) {
-  const i = state.roles.findIndex(r => r.id === id);
-  const j = i + dir;
-  if (j < 0 || j >= state.roles.length) return;
-  const a = state.roles[i], b = state.roles[j];
-  const r1 = await db.from('roles').update({ position: j }).eq('id', a.id);
-  const r2 = await db.from('roles').update({ position: i }).eq('id', b.id);
-  if (r1.error || r2.error) { toast(friendlyError(r1.error || r2.error), true); return; }
-  await loadAll();
-  openRolesModal();
+  affs.push({ id: 'a99', person_id: 'p1', builder_id: 'b3', title_company_id: null, role: 'Builder Rep', handles: '', always_cc: false, created_at: now, updated_at: now, updated_by: '' });
+  affs.push({ id: 'a98', person_id: 'p5', builder_id: 'b9', title_company_id: null, role: 'Realtor', handles: '', always_cc: true, created_at: now, updated_at: now, updated_by: '' });
+  demoStore.people = people; demoStore.affiliations = affs; demoStore.builders = builders; demoStore.title_companies = tcs;
+  demoStore.roles = ['Owner', 'Listing Agent', 'Builder Rep', 'Builder Docs POC', 'Appraisal POC', 'Realtor', 'Sales', 'Transaction Coordinator', 'Closing Coordinator', 'Other'].map((name, i) => ({ id: id('r', i), name, position: i }));
+  demoStore.allowed_users = [{ email: 'you@example.com', access: 'admin' }];
 }
 
 // ------------------------------------------------------------------ events
@@ -1129,59 +637,138 @@ document.addEventListener('click', async (e) => {
   const authBtn = e.target.closest('[data-auth]');
   if (authBtn) { handleAuth(authBtn.dataset.auth); return; }
 
+  if (e.target.closest('#scrim')) { closeInsp(); return; }
+  // Whole table rows act as links to the record they name.
+  const tr = e.target.closest('tr[data-href]');
+  if (tr && !e.target.closest('a, button, input, select')) { location.hash = tr.dataset.href; return; }
+  if (state.menu && !e.target.closest('.menu, .row-menu, [data-action="menu"], [data-action="row-menu"]')) {
+    state.menu = null; render();
+  }
+
   const el = e.target.closest('[data-action]');
   if (!el) return;
   const a = el.dataset.action;
+  const d = el.dataset;
 
-  if (a === 'close-modal') {
-    if (e.target.closest('[data-stop]') && !e.target.closest('.modal-close')
-        && !e.target.closest('.btn-ghost')) return;
-    closeModal(); return;
-  }
-  if (e.target.closest('.modal-overlay') && !e.target.closest('[data-stop]')) { closeModal(); return; }
+  // Rows and results are real links; the router handles them. Nothing to do here.
+  if (a === 'menu') { state.menu = state.menu === 'account' ? null : 'account'; render(); return; }
+  if (a === 'row-menu') { e.preventDefault(); const key = 'row:' + d.id; state.menu = state.menu === key ? null : key; render(); return; }
+  if (a === 'more') { state.menu = state.menu === 'more' ? null : 'more'; render(); return; }
+  if (a === 'copy') { e.preventDefault(); copyText(d.copy, el); return; }
+  if (a === 'copy-cc') { copyText(ccEmails(builder(d.id)).join('; '), el); return; }
+  if (a === 'toggle-empty') { state.showEmpty[d.id] = !state.showEmpty[d.id]; render(); return; }
+  if (a === 'show-more') { state.expanded[d.key] = !state.expanded[d.key]; render(); return; }
+  if (a === 'close-insp') { closeInsp(); return; }
+  if (a === 'details') { state.panel = null; state.inspOpen = true; render(); return; }
+  if (a === 'back') { navigate('#/' + state.route.section); return; }
+  if (a === 'reload') { location.reload(); return; }
+  if (a === 'signout') { state.menu = null; if (DEMO) { toast('Demo mode has no sign in.'); return; } supa.auth.signOut(); return; }
+  if (a === 'export') { state.menu = null; render(); exportExcel(); return; }
+  if (a === 'panel') { state.menu = null; state.form = null; state.panel = d.panel; state.inspOpen = true; render(); return; }
 
-  if (a === 'select') { state.sel = { type: el.dataset.type, id: el.dataset.id }; render(); }
-  if (a === 'new-builder') openBuilderModal(null);
-  if (a === 'new-titleco') openTitleCoModal(null);
-  if (a === 'new-contact') openContactModal(null, { builderId: el.dataset.builder });
-  if (a === 'new-titlecontact') openTitleContactModal(null, { tcId: el.dataset.tc });
-  if (a === 'new-general') openGeneralModal(null);
-  if (a === 'edit-builder') openBuilderModal(el.dataset.id);
-  if (a === 'edit-contact') openContactModal(el.dataset.id);
-  if (a === 'edit-titleco') openTitleCoModal(el.dataset.id);
-  if (a === 'edit-titlecontact') openTitleContactModal(el.dataset.id);
-  if (a === 'edit-general') openGeneralModal(el.dataset.id);
-  if (a === 'save-builder') handleSave('builder');
-  if (a === 'save-contact') handleSave('contact');
-  if (a === 'save-titleco') handleSave('titleco');
-  if (a === 'save-titlecontact') handleSave('titlecontact');
-  if (a === 'save-general') handleSave('general');
-  if (a === 'modal-delete') handleModalDelete(el);
-  if (a === 'help') openHelpModal();
-  if (a === 'team') openTeamModal();
-  if (a === 'roles') openRolesModal();
-  if (a === 'export') exportExcel();
-  if (a === 'signout') db.auth.signOut();
-  if (a === 'team-add') teamAdd();
-  if (a === 'team-remove') teamRemove(el.dataset.email, el);
-  if (a === 'role-add') roleAdd();
-  if (a === 'role-remove') roleRemove(el.dataset.id, el);
-  if (a === 'role-up') roleMove(el.dataset.id, -1);
-  if (a === 'role-down') roleMove(el.dataset.id, 1);
+  // Editing
+  if (a === 'new-builder') { openForm('builder', {}); return; }
+  if (a === 'new-titleco') { openForm('titleco', {}); return; }
+  if (a === 'edit-builder') { openForm('builder', { id: d.id }); return; }
+  if (a === 'edit-titleco') { openForm('titleco', { id: d.id }); return; }
+  if (a === 'new-person') { openForm('person', { parentKind: d.kind, parentId: d.parent }); return; }
+  if (a === 'new-person-free') { openForm('person', {}); return; }
+  if (a === 'edit-person') { openForm('person', { id: d.id, affId: d.aff || null }); return; }
+  if (a === 'new-aff') { openForm('aff', { personId: d.person }); return; }
+  if (a === 'edit-aff') { openForm('aff', { id: d.id }); return; }
+  if (a === 'link-titleco') { openForm('linkTitleCo', { builderId: d.id }); return; }
+  if (a === 'delete') { deleteFromForm(el); return; }
+  if (a === 'remove-aff') { removeAffiliation(d.id, el); return; }
+  if (a === 'cancel') { closeForm(); return; }
+  if (a === 'discard') { state.form.confirmDiscard = true; state.form.dirty = false; closeForm(); return; }
+  if (a === 'keep') { keepEditing(); return; }
+  if (a === 'ta-pick') { typeaheadPick(d.id); return; }
+  if (a === 'ta-create') { typeaheadCreate(); return; }
+  if (a === 'add-row') { addRow(d.kind); return; }
+  if (a === 'del-row') { delRow(el); return; }
+  if (a === 'force-create') { state.form.force = true; $('#insp form') && $('#insp form').requestSubmit(); return; }
+  if (a === 'link-existing') { typeaheadPick(d.id); return; }
+
+  // Team and roles (admin)
+  if (a === 'team-add') { teamAdd(); return; }
+  if (a === 'team-remove') { teamRemove(d.email, el); return; }
+  if (a === 'role-add') { roleAdd(); return; }
+  if (a === 'role-remove') { roleRemove(d.id, el); return; }
+  if (a === 'role-up') { roleMove(d.id, -1); return; }
+  if (a === 'role-down') { roleMove(d.id, 1); return; }
+});
+
+document.addEventListener('submit', (e) => {
+  const auth = e.target.closest('form[data-auth-form]');
+  if (auth) { e.preventDefault(); handleAuth(auth.dataset.authForm); return; }
+  const form = e.target.closest('form[data-form]');
+  if (!form) return;
+  e.preventDefault();
+  handleSubmit(form, e.submitter);
 });
 
 document.addEventListener('change', (e) => {
   const sel = e.target.closest('[data-team-access]');
-  if (sel) teamSetAccess(sel);
+  if (sel) { teamSetAccess(sel); return; }
+  const f = e.target.closest('[data-filter]');
+  if (f) { state.filters[f.dataset.filter] = f.value; renderList(); return; }
+  if (e.target.closest('#insp form')) {
+    markDirty();
+    if (e.target.matches('[data-rerender]')) {   // a choice that changes which fields show
+      state.form.draft = readForm(e.target.closest('form'));
+      renderInsp();
+    }
+  }
 });
 
-$('#search').addEventListener('input', (e) => {
-  state.q = e.target.value;
-  renderSidebar();
+let searchTimer = null;
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'search') {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { state.q = e.target.value; state.searchCursor = -1; renderList(); }, 120);
+    return;
+  }
+  if (e.target.matches('[data-ta]')) { markDirty(); clearFieldError(e.target); typeaheadInput(e.target); return; }
+  if (e.target.closest('#insp form')) { markDirty(); clearFieldError(e.target); }
 });
 
-window.addEventListener('focus', () => {
-  if (state.session && state.allowed) refresh();
+document.addEventListener('keydown', (e) => {
+  const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+  if ((e.key === '/' && !inField) || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k')) {
+    const s = $('#search');
+    if (s) { e.preventDefault(); s.focus(); s.select(); }
+    return;
+  }
+  if (e.key === 'Escape') {
+    if (state.menu) { state.menu = null; render(); return; }
+    if (e.target.id === 'search' && state.q) { state.q = ''; e.target.value = ''; renderList(); return; }
+    if (e.target.matches('[data-ta]') && state.form && state.form.taOpen) { state.form.taOpen = false; const d = $('#ta-drop'); if (d) d.remove(); return; }
+    if (state.form || state.panel || (state.inspOpen && layoutMode() !== 'wide')) { closeInsp(); return; }
+    return;
+  }
+  if (e.target.id === 'search') {
+    const hits = $$('#list .rows a.row');
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!hits.length) return;
+      state.searchCursor = Math.max(0, Math.min(hits.length - 1, state.searchCursor + (e.key === 'ArrowDown' ? 1 : -1)));
+      hits.forEach((h, i) => h.classList.toggle('on', i === state.searchCursor));
+      hits[state.searchCursor].scrollIntoView({ block: 'nearest' });
+    }
+    if (e.key === 'Enter') {
+      const pick = hits[state.searchCursor >= 0 ? state.searchCursor : 0];
+      if (pick) { location.hash = pick.getAttribute('href'); state.q = ''; e.target.value = ''; }
+    }
+    return;
+  }
+  if (e.target.matches('[data-ta]')) typeaheadKey(e);
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && e.target.closest('#insp form')) {
+    e.preventDefault();
+    e.target.closest('form').requestSubmit();
+  }
 });
+
+window.addEventListener('focus', () => { if (state.session && state.allowed) refresh(); });
+window.addEventListener('resize', () => { if (state.allowed) { ensureRecord(false); applyLayout(); } });
 
 boot();
