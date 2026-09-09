@@ -22,8 +22,8 @@ jobs:
         # it identifies the project, it is not a secret, and row level security
         # returns an empty list to anonymous callers. The query still counts as
         # project activity for Supabase, which is the whole point.
-        # Sent as apikey only. An "Authorization: Bearer" header would be
-        # redundant here and makes secret scanners report a false positive.
+        # Sent as apikey only: an Authorization header would be redundant
+        # here, and its token format makes secret scanners cry wolf.
         run: |
           code=$(curl -s -o /dev/null -w "%{http_code}" \
             "https://rqmuaeuqiqkhsnmashab.supabase.co/rest/v1/roles?select=name&limit=1" \
