@@ -6,7 +6,7 @@
 'use strict';
 
 // Bump on every deploy, and update the ?v= numbers in index.html to match.
-const APP_VERSION = '6';
+const APP_VERSION = '7';
 
 const SUPABASE_URL = 'https://rqmuaeuqiqkhsnmashab.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Vrs-KYaeRnKCXlhAvq_w1w_8JqcBtJq';
@@ -247,9 +247,8 @@ function enterApp() {
   $('#app').hidden = false;
   state.recent = loadRecent();
   state.route = parseHash();
-  const explicit = Boolean(state.route.id);      // a deep link counts as a visit; the auto-selected first record does not
-  ensureRecord(true);
-  if (explicit) remember();
+  ensureRecord();
+  remember();
   state.inspOpen = Boolean(state.route.sub);   // a deep link to a person opens the panel on smaller screens too
   render();
 }
@@ -415,7 +414,7 @@ async function deleteRow(table, id) {
    while someone is in the middle of a form. */
 async function refresh() {
   if (state.form || Date.now() - state.lastLoad < 30000) return;
-  if (await loadAll()) { ensureRecord(false); render(); }
+  if (await loadAll()) { ensureRecord(); render(); }
 }
 
 // ------------------------------------------------------------------ routing
@@ -445,7 +444,7 @@ function onHashChange() {
   state.menu = null;
   if (state.route.sub) state.panel = null;              // picking a person replaces an open help/team panel
   state.inspOpen = Boolean(state.route.sub || state.form || state.panel);
-  ensureRecord(false);
+  ensureRecord();
   remember();
   render();
   if (prev.id !== state.route.id) {
@@ -454,14 +453,12 @@ function onHashChange() {
   }
 }
 /* On wide layouts an empty section shows its first record; on phones it shows the list. */
-function ensureRecord(replace) {
+/* Drops ids that no longer exist. Nothing is selected on the user's behalf: a section opens as its list
+   and the record pane stays empty until a row is picked. */
+function ensureRecord() {
   const r = state.route;
   const rows = sectionRows(r.section);
   if (r.id && !rows.some(x => x.id === r.id)) { r.missing = r.id; r.id = null; r.sub = null; r.subId = null; }
-  if (!r.id && !r.missing && rows.length && layoutMode() !== 'phone') {
-    r.id = rows[0].id;
-    history.replaceState(null, '', routeHash(r));
-  }
   if (r.sub === 'person' && r.subId && !person(r.subId)) { r.sub = null; r.subId = null; }
   if (r.sub === 'at' && r.subId && !affById(r.subId)) { r.sub = null; r.subId = null; }
 }
@@ -772,6 +769,6 @@ document.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('focus', () => { if (state.session && state.allowed) refresh(); });
-window.addEventListener('resize', () => { if (state.allowed) { ensureRecord(false); applyLayout(); } });
+window.addEventListener('resize', () => { if (state.allowed) applyLayout(); });
 
 boot();

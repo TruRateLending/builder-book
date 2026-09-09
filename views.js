@@ -147,7 +147,10 @@ function renderRecord() {
   }
   if (!cur) {
     const rows = sectionRows(state.route.section);
-    main.innerHTML = rows.length ? '' : `<div class="rec-empty">${{ builders: 'No builders.', people: 'No people.', title: 'No title companies.' }[state.route.section]}${canWrite() ? ' Use the + button to add one.' : ''}</div>`;
+    const noun = { builders: 'builder', people: 'person', title: 'title company' }[state.route.section];
+    main.innerHTML = rows.length
+      ? `<div class="rec-empty">Select a ${noun} from the list.</div>`
+      : `<div class="rec-empty">${{ builders: 'No builders.', people: 'No people.', title: 'No title companies.' }[state.route.section]}${canWrite() ? ' Use the + button to add one.' : ''}</div>`;
     return;
   }
   const saved = state.scroll[state.route.section + ':' + state.route.id];
@@ -324,7 +327,7 @@ function renderInsp() {
   else {
     const cur = currentRecord();
     const r = state.route;
-    if (!cur) html = `<div class="insp-empty">Nothing selected.</div>`;
+    if (!cur) html = '';                                   // nothing picked yet: the panel stays quiet
     else if (r.sub === 'person' && person(r.subId)) html = personCardHtml(person(r.subId), cur, closeX);
     else if (r.sub === 'at' && affById(r.subId)) html = orgSummaryHtml(affById(r.subId), cur.rec, closeX);
     else if (cur.kind === 'builder') html = builderDetailsHtml(cur.rec);
