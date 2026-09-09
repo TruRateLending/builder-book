@@ -42,7 +42,8 @@ mark { background: none; color: inherit; font-weight: 600; }
 .auth-msg.err { color: var(--danger); }
 
 /* ---------------------------------------------------------------- shell */
-#app { display: grid; grid-template-columns: var(--rail) var(--list) minmax(0, 1fr) var(--insp); height: 100dvh; overflow: hidden; }
+#app { display: grid; grid-template-columns: var(--rail) var(--list) minmax(0, 1fr) var(--insp); grid-template-rows: minmax(0, 1fr); height: 100dvh; overflow: hidden; }
+#app > * { min-height: 0; }   /* panes stay inside the window so their own scroll areas work */
 #rail { background: #fff; border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 8px; gap: 4px; }
 #list { background: #fff; border-right: 1px solid var(--border); display: flex; flex-direction: column; min-width: 0; }
 #record { overflow: auto; min-width: 0; }
