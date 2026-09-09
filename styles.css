@@ -35,8 +35,7 @@ mark { background: none; color: inherit; font-weight: 600; }
 /* ---------------------------------------------------------------- sign in */
 #auth-screen { min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 24px; }
 .auth-card { width: 360px; max-width: 100%; background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 28px; }
-.auth-logo { display: block; width: 210px; max-width: 100%; height: auto; margin: 4px auto 16px; }
-.auth-word { font-size: 16px; font-weight: 600; margin-bottom: 4px; text-align: center; }
+.auth-logo { display: block; width: 210px; max-width: 100%; height: auto; margin: 4px auto 12px; }
 .auth-sub { font-size: 13px; color: var(--t2); margin-bottom: 16px; text-align: center; }
 .auth-links { display: flex; justify-content: space-between; margin-top: 16px; font-size: 13px; }
 .auth-msg { margin-top: 12px; font-size: 13px; line-height: 18px; color: var(--t2); }
