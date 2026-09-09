@@ -6,7 +6,7 @@
 'use strict';
 
 // Bump on every deploy, and update the ?v= numbers in index.html to match.
-const APP_VERSION = '8';
+const APP_VERSION = '9';
 
 const SUPABASE_URL = 'https://rqmuaeuqiqkhsnmashab.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Vrs-KYaeRnKCXlhAvq_w1w_8JqcBtJq';
@@ -37,7 +37,6 @@ const state = {
   form: null,               // {kind, id, preset, linkPersonId, force, busy} while editing
   panel: null,              // 'team' | 'roles' | 'help' | null
   inspOpen: false,          // mid/phone layouts: is the inspector drawer showing
-  showEmpty: {},            // record id -> true after "Show N empty fields"
   expanded: {},             // "id:field" -> true after "Show more"
   menu: null,               // 'account' | 'row:<id>' | 'more' | null
   recent: [],
@@ -656,7 +655,6 @@ document.addEventListener('click', async (e) => {
   if (a === 'more') { state.menu = state.menu === 'more' ? null : 'more'; render(); return; }
   if (a === 'copy') { e.preventDefault(); copyText(d.copy, el); return; }
   if (a === 'copy-cc') { copyText(ccEmails(builder(d.id)).join('; '), el); return; }
-  if (a === 'toggle-empty') { state.showEmpty[d.id] = !state.showEmpty[d.id]; render(); return; }
   if (a === 'show-more') { state.expanded[d.key] = !state.expanded[d.key]; render(); return; }
   if (a === 'close-insp') { closeInsp(); return; }
   if (a === 'details') { state.panel = null; state.inspOpen = true; render(); return; }

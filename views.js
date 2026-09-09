@@ -360,20 +360,12 @@ function metaHtml(rec) {
   const by = who(rec.updated_by);
   return `<span class="meta">${by ? `Edited by ${esc(by)}, ${fmtAgo(rec.updated_at)}` : (rec.updated_at ? `Edited ${fmtAgo(rec.updated_at)}` : '')}</span>`;
 }
-function emptyFieldsHtml(rec, fields) {
-  const empty = fields.filter(([k]) => !t(rec[k]));
-  if (!empty.length) return '';
-  const open = state.showEmpty[rec.id];
-  return `${open ? empty.map(([, label]) => `<div class="prop"><div class="k">${esc(label)}</div><div class="v muted">Empty</div></div>`).join('') : ''}
-    <button class="tbtn" data-action="toggle-empty" data-id="${rec.id}">${open ? 'Hide empty fields' : `Show ${plural(empty.length, 'empty field')}`}</button>`;
-}
 function builderDetailsHtml(b) {
   const cc = affsOfBuilder(b.id).filter(a => a.always_cc);
   const ccNames = cc.map(a => (person(a.person_id) || {}).name).filter(Boolean);
   const emails = ccEmails(b);
   const dbx = t(b.dropbox);
   const isUrl = /^https?:\/\//i.test(dbx);
-  const fields = [['comm_rules', 'CC rules'], ['concession', 'Concession'], ['calc_from', 'Calculated from'], ['allowed_uses', 'Allowed uses'], ['special_process', 'Special process'], ['notes', 'Notes'], ['dropbox', 'Dropbox folder']];
   return `<div class="insp-h"><span class="t">Builder details</span>${canWrite() ? `<button class="tbtn" data-action="edit-builder" data-id="${b.id}">Edit</button>` : ''}${layoutMode() === 'wide' ? '' : `<button class="x" data-action="close-insp" aria-label="Close">${icon('x')}</button>`}</div>
   <div class="insp-b">
     ${propHtml(b.id + ':cc', 'CC rules', b.comm_rules, { clamp: true })}
@@ -384,19 +376,16 @@ function builderDetailsHtml(b) {
     ${propHtml(b.id + ':sp', 'Special process', b.special_process, { clamp: true })}
     ${propHtml(b.id + ':notes', 'Notes', b.notes, { clamp: true })}
     ${dbx && !isUrl ? `<div class="prop"><div class="k">Dropbox folder</div><div class="v"><span class="always">${esc(dbx)} ${copyBtn(dbx)}</span></div></div>` : ''}
-    ${emptyFieldsHtml(b, fields)}
   </div>
   <div class="insp-f">${metaHtml(b)}</div>`;
 }
 function companyDetailsHtml(c) {
-  const fields = [['team_email', 'Team email'], ['office_phone', 'Office phone'], ['office_address', 'Office address'], ['notes', 'Notes']];
   return `<div class="insp-h"><span class="t">Company details</span>${canWrite() ? `<button class="tbtn" data-action="edit-titleco" data-id="${c.id}">Edit</button>` : ''}${layoutMode() === 'wide' ? '' : `<button class="x" data-action="close-insp" aria-label="Close">${icon('x')}</button>`}</div>
   <div class="insp-b">
     ${t(c.team_email) ? `<div class="prop"><div class="k">Team email</div><div class="crow always"><span class="val"><a href="mailto:${esc(t(c.team_email))}">${esc(t(c.team_email))}</a></span>${copyBtn(t(c.team_email))}</div></div>` : ''}
     ${t(c.office_phone) ? `<div class="prop"><div class="k">Office phone</div><div class="crow always"><span class="val num"><a href="${telHref(c.office_phone)}">${esc(fmtPhone(c.office_phone))}</a></span>${copyBtn(t(c.office_phone))}</div></div>` : ''}
     ${propHtml(c.id + ':addr', 'Office address', c.office_address)}
     ${propHtml(c.id + ':notes', 'Notes', c.notes, { clamp: true })}
-    ${emptyFieldsHtml(c, fields)}
   </div>
   <div class="insp-f">${metaHtml(c)}</div>`;
 }
