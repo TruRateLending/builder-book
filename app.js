@@ -725,7 +725,7 @@ function openHelpModal() {
     ['Title companies are shared', `Link a builder to a title company and its escrow team appears on the builder's page. Each company holds up to ${MAX_TITLE_CONTACTS} people. Update the company once and every builder linked to it stays current.`],
     ['Contacts', 'The Contacts list at the bottom of the sidebar is for people who are not tied to one builder. Two phone numbers, two emails, and a notes field each.'],
     ['Working a file?', 'Read the CC rules and Concessions before structuring or emailing. The people cards say exactly who handles builder docs, appraisals, and seller-signed items.'],
-    ['Export to Excel', 'The Export button downloads the whole database as the team’s standard Excel workbook, dashboard and gap report included, in case you ever want a spreadsheet copy or an offline backup.'],
+    ['Export to Excel', 'The Export button downloads the whole database as the team’s standard Excel workbook, dashboard included, in case you ever want a spreadsheet copy or an offline backup.'],
   ];
   modalShell('How this works', `
     <div class="help-body">
