@@ -4,10 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>TRL Contacts</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%232f5fc5'/><text x='16' y='21' font-family='-apple-system,Segoe UI,sans-serif' font-size='11' font-weight='600' fill='white' text-anchor='middle'>TRL</text></svg>">
+<link rel="icon" type="image/png" href="favicon.png?v=10">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=10">
 <!-- Bump the ?v= number on every deploy (here and on the four scripts below) so browsers
      fetch the new files instead of a cached copy. It must match APP_VERSION in app.js. -->
-<link rel="stylesheet" href="styles.css?v=9">
+<link rel="stylesheet" href="styles.css?v=10">
 </head>
 <body>
 
@@ -16,6 +17,7 @@
 <!-- Sign in / create account / reset password -->
 <div id="auth-screen" hidden>
   <div class="auth-card">
+    <img class="auth-logo" src="logo.png?v=10" alt="Tru Rate Lending">
     <div class="auth-word">TRL Contacts</div>
     <div id="auth-body"></div>
   </div>
@@ -37,9 +39,9 @@
 
 <script src="vendor/supabase.js"></script>
 <script src="vendor/jszip.min.js"></script>
-<script src="views.js?v=9"></script>
-<script src="forms.js?v=9"></script>
-<script src="export.js?v=9"></script>
-<script src="app.js?v=9"></script>
+<script src="views.js?v=10"></script>
+<script src="forms.js?v=10"></script>
+<script src="export.js?v=10"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>

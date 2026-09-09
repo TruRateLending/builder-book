@@ -19,7 +19,7 @@ function renderRail() {
   const s = state.route.section;
   const nav = (sec, label, ic) => `<a class="nav" href="#/${sec}" ${s === sec ? 'aria-current="page"' : ''}>${icon(ic, 20)}<span>${label}</span></a>`;
   $('#rail').innerHTML = `
-    <div class="brand" aria-hidden="true">TRL</div>
+    <div class="brand"><img src="mark.png?v=${APP_VERSION}" alt="Tru Rate Lending"></div>
     ${nav('builders', 'Builders', 'builders')}
     ${nav('people', 'People', 'people')}
     ${nav('title', 'Title', 'title')}
